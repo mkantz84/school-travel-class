@@ -416,12 +416,23 @@ function focalBox() {
     return `<div class="focal has"><div class="avatar">🧭</div>
       <div class="grow"><div class="small muted">הפוקולייזר של הטיול</div><h3 style="margin:0">${esc(t.focalizer_name)}</h3>
       ${t.focalizer_phone ? `<a href="tel:${esc(t.focalizer_phone)}">${esc(t.focalizer_phone)}</a>` : ''}</div>
-      <button class="btn ghost sm" onclick="pickFocalizer()">החלפה</button></div>`;
+      <div class="row">
+        <button class="btn ghost sm" onclick="pickFocalizer()">החלפה</button>
+        <button class="btn danger sm" onclick="removeFocalizer()">הסרה</button>
+      </div></div>`;
   }
   return `<div class="focal"><div class="avatar">🙋</div>
     <div class="grow"><h3 style="margin:0">מחפשים פוקולייזר לטיול הזה!</h3><span class="small muted">מקבל את פרטי הטיול, ממנה אחראים, מרכז עדכונים והוצאות. מתחלף בכל טיול.</span></div>
     <div class="row"><button class="btn coral" onclick="becomeFocalizer()">אני אהיה הפוקולייזר!</button>
     <button class="btn ghost sm" onclick="pickFocalizer()">לרשום מישהו אחר</button></div></div>`;
+}
+
+async function removeFocalizer() {
+  const t = S.data.trip;
+  if (!confirm(`להסיר את ${t.focalizer_name} מתפקיד הפוקולייזר?`)) return;
+  await api('trips/' + t.id, 'PUT', { focalizer_family_id: null, focalizer_name: '', focalizer_phone: '' });
+  toast('הפוקולייזר הוסר 💨');
+  rerenderTrip();
 }
 
 function becomeFocalizer() {
@@ -588,7 +599,13 @@ function tabMeals() {
       ${S.data.meals.map(mealCard).join('')}
       <div class="card meal ${t.tools_name ? '' : 'open'}" style="background:var(--teal-soft)">
         <div class="spread"><h3 style="margin:0">🧰 אחראי כלים</h3><button class="icon-btn" onclick="editTools()" title="עריכה">✏️</button></div>
-        ${t.tools_name ? `<div><b>${esc(t.tools_name)}</b> ${t.tools_phone ? `· <a href="tel:${esc(t.tools_phone)}">${esc(t.tools_phone)}</a>` : ''}</div>`
+        ${t.tools_name ? `<div class="spread" style="background:rgba(255,255,255,.6);padding:.4rem .7rem;border-radius:12px">
+            <div><b>${esc(t.tools_name)}</b> ${t.tools_phone ? `· <a href="tel:${esc(t.tools_phone)}">${esc(t.tools_phone)}</a>` : ''}</div>
+            <div class="row">
+              <button class="btn ghost sm" onclick="editTools()" style="padding:.2rem .6rem;font-size:.85rem">החלפה</button>
+              <button class="btn danger sm" onclick="removeToolsResponsible()" style="padding:.2rem .6rem;font-size:.85rem">הסרה</button>
+            </div>
+          </div>`
           : `<div class="muted">מחפשים אחראי/ת כלים 🙋</div><div><button class="btn coral sm" onclick="takeTools()">אני לוקח/ת!</button></div>`}
         <div class="small muted">מאחד את דרישות הכלים מכל הארוחות, בודק מה קיים במקום ובארגז החוג (שמן, תבלינים, כלי בישול, שולחן מתקפל, מפה ומחצלת) ומתאם השלמות עם המשפחות.</div>
       </div>
@@ -604,13 +621,25 @@ function mealCard(m) {
   const open = !m.responsible;
   return `<div class="card meal ${open ? 'open' : ''}">
     <div class="spread"><h3 style="margin:0">${esc(m.title)}</h3>
-      <div class="row">${m.plan_received ? '<span class="pill sage">✔ תוכנית התקבלה</span>' : ''}<button class="icon-btn" onclick="openMealForm(${m.id})" title="עריכה">✏️</button></div></div>
+      <div class="row">${m.plan_received ? '<span class="pill sage">✔ תוכנית התקבלה</span>' : ''}<button class="icon-btn" onclick="openMealForm(${m.id})" title="עריכת פרטי המשימה">✏️</button></div></div>
     ${open ? `<div class="muted">מחפשים אחראי/ת 🙋</div><div><button class="btn coral sm" onclick="takeMeal(${m.id})">אני לוקח/ת!</button></div>`
-      : `<div>👤 <b>${esc(m.responsible)}</b> ${m.phone ? `· <a href="tel:${esc(m.phone)}">${esc(m.phone)}</a>` : ''}</div>`}
+      : `<div class="spread" style="background:var(--bg);padding:.4rem .7rem;border-radius:12px">
+           <div>👤 <b>${esc(m.responsible)}</b> ${m.phone ? `· <a href="tel:${esc(m.phone)}">${esc(m.phone)}</a>` : ''}</div>
+           <div class="row"><button class="btn ghost sm" onclick="openMealForm(${m.id})" style="padding:.2rem .6rem;font-size:.85rem">החלפה</button>
+           <button class="btn danger sm" onclick="removeMealResponsible(${m.id})" style="padding:.2rem .6rem;font-size:.85rem">הסרה</button></div>
+         </div>`}
     ${m.menu ? `<div class="kv pre"><b>מה אוכלים:</b> ${esc(m.menu)}</div>` : ''}
     ${m.helpers ? `<div class="kv"><b>עוזרים:</b> ${esc(m.helpers)}</div>` : ''}
     ${m.tools ? `<div class="kv pre"><b>כלים:</b> ${esc(m.tools)}</div>` : ''}
   </div>`;
+}
+
+async function removeMealResponsible(id) {
+  const m = S.data.meals.find((x) => x.id === id);
+  if (!confirm(`להסיר את ${m?.responsible || 'האחראי/ת'} מ-${m?.title || 'המשימה'}?`)) return;
+  await api('meals/' + id, 'PUT', { responsible: '', phone: '' });
+  toast('האחריות הוסרה 💨');
+  rerenderTrip();
 }
 
 function takeMeal(id) {
@@ -633,8 +662,12 @@ function openMealForm(id) {
         if (meal) await api('meals/' + id, 'PUT', v); else await api(`trips/${S.data.trip.id}/meals`, 'POST', v);
         toast('נשמר ✨'); rerenderTrip();
       } },
-      ...(meal ? [{ label: 'מחיקה', cls: 'danger', onClick: async () => {
-        if (!confirm('למחוק את המשימה?')) return false;
+      ...(meal && meal.responsible ? [{ label: 'הסרת אחראי/ת', cls: 'danger', onClick: async () => {
+        await api('meals/' + id, 'PUT', { responsible: '', phone: '' });
+        toast('האחראי/ת הוסר/ה'); rerenderTrip();
+      } }] : []),
+      ...(meal ? [{ label: 'מחיקת משימה', cls: 'danger', onClick: async () => {
+        if (!confirm('למחוק את המשימה לגמרי?')) return false;
         await api('meals/' + id, 'DELETE'); rerenderTrip();
       } }] : []),
     ],
@@ -649,12 +682,26 @@ function takeTools() {
   });
 }
 
+async function removeToolsResponsible() {
+  const t = S.data.trip;
+  if (!confirm(`להסיר את ${t.tools_name} מאחריות הכלים?`)) return;
+  await api('trips/' + t.id, 'PUT', { tools_name: '', tools_phone: '' });
+  toast('אחראי הכלים הוסר 💨');
+  rerenderTrip();
+}
+
 function editTools() {
   const t = S.data.trip;
   openModal({
     title: 'אחראי כלים 🧰',
     body: fieldsHtml([{ name: 'tools_name', label: 'שם', list: 'famNames' }, { name: 'tools_phone', label: 'טלפון', type: 'tel' }], t) + familyNamesDatalist(),
-    actions: [{ label: 'שמירה', onClick: async (v) => { await api('trips/' + t.id, 'PUT', v); rerenderTrip(); } }],
+    actions: [
+      { label: 'שמירה', onClick: async (v) => { await api('trips/' + t.id, 'PUT', v); rerenderTrip(); } },
+      ...(t.tools_name ? [{ label: 'הסרת אחראי/ת', cls: 'danger', onClick: async () => {
+        await api('trips/' + t.id, 'PUT', { tools_name: '', tools_phone: '' });
+        toast('אחראי הכלים הוסר'); rerenderTrip();
+      } }] : []),
+    ],
   });
 }
 
