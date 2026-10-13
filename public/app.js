@@ -429,9 +429,7 @@ function focalBox() {
 
 async function removeFocalizer() {
   const t = S.data.trip;
-  if (!confirm(`להסיר את ${t.focalizer_name} מתפקיד הפוקולייזר?`)) return;
   await api('trips/' + t.id, 'PUT', { focalizer_family_id: null, focalizer_name: '', focalizer_phone: '' });
-  toast('הפוקולייזר הוסר 💨');
   rerenderTrip();
 }
 
@@ -635,10 +633,7 @@ function mealCard(m) {
 }
 
 async function removeMealResponsible(id) {
-  const m = S.data.meals.find((x) => x.id === id);
-  if (!confirm(`להסיר את ${m?.responsible || 'האחראי/ת'} מ-${m?.title || 'המשימה'}?`)) return;
   await api('meals/' + id, 'PUT', { responsible: '', phone: '' });
-  toast('האחריות הוסרה 💨');
   rerenderTrip();
 }
 
@@ -664,7 +659,7 @@ function openMealForm(id) {
       } },
       ...(meal && meal.responsible ? [{ label: 'הסרת אחראי/ת', cls: 'danger', onClick: async () => {
         await api('meals/' + id, 'PUT', { responsible: '', phone: '' });
-        toast('האחראי/ת הוסר/ה'); rerenderTrip();
+        rerenderTrip();
       } }] : []),
       ...(meal ? [{ label: 'מחיקת משימה', cls: 'danger', onClick: async () => {
         if (!confirm('למחוק את המשימה לגמרי?')) return false;
@@ -684,9 +679,7 @@ function takeTools() {
 
 async function removeToolsResponsible() {
   const t = S.data.trip;
-  if (!confirm(`להסיר את ${t.tools_name} מאחריות הכלים?`)) return;
   await api('trips/' + t.id, 'PUT', { tools_name: '', tools_phone: '' });
-  toast('אחראי הכלים הוסר 💨');
   rerenderTrip();
 }
 
