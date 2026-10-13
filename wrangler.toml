@@ -1,4 +1,10 @@
-name = "tiyulim-site"
+name = "school-travel-class"
 compatibility_date = "2025-01-01"
 pages_build_output_dir = "public"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "tiyulim-db"
+database_id = "a0baca0d-d08b-4c17-8654-f2f0be890d03"
+
 
