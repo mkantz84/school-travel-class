@@ -364,7 +364,9 @@ function tripCard(t) {
 function openTripForm(t) {
   openModal({
     title: t ? 'עריכת פרטי הטיול ✏️' : 'טיול חדש 🗺️',
-    body: (t ? '' : '<p class="muted small">אפשר למלא עכשיו רק שם ותאריך ולהשלים אחר כך. ארוחות וצ\'ק ליסט ייווצרו אוטומטית.</p>') + fieldsHtml(TRIP_SPEC, t || {}),
+    body: t ? fieldsHtml(TRIP_SPEC, t)
+      : '<p class="muted small">מתחילים רק משם הטיול 🌱 את כל השאר (יעד, לינה, אחראים, משתתפים) משלימים אחר כך בדף הטיול. ארוחות וצ\'ק ליסט נוצרים אוטומטית.</p>'
+        + fieldsHtml(TRIP_SPEC.filter((f) => ['name', 'start_date', 'end_date'].includes(f.name))),
     actions: [{
       label: t ? 'שמירה' : 'יצירת טיול',
       onClick: async (v) => {
