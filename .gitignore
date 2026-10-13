@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+._*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Node
+node_modules/
+
+# Env / secrets
+.env
+.env.*
+.dev.vars
+
+# Cloudflare / Wrangler local files
+.wrangler/

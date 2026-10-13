@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>חוג הטיולים שלנו ⛺</title>
+  <meta name="description" content="חוג הטיולים של הכיתה – פרטי טיולים, אחראים, משימות והתחשבנות הוגנת" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛺</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a href="#/" class="brand"><span class="brand-icon">⛺</span> חוג הטיולים</a>
+      <nav class="nav" id="nav">
+        <a href="#/" data-nav="home">בית</a>
+        <a href="#/trips" data-nav="trips">טיולים</a>
+        <a href="#/families" data-nav="families">משפחות</a>
+        <a href="#/how" data-nav="how">איך זה עובד</a>
+      </nav>
+      <button class="me-chip" id="meChip" type="button" title="מי אני?"></button>
+    </div>
+  </header>
+
+  <main id="app" class="container"><div class="loading">טוען… 🌿</div></main>
+
+  <footer class="footer">נבנה באהבה על ידי ההורים 💚 · יוצאים יחד, מכירים את הארץ</footer>
+
+  <dialog id="modal" class="modal">
+    <form method="dialog" class="modal-card" id="modalForm">
+      <div class="modal-head">
+        <h3 id="modalTitle"></h3>
+        <button type="button" class="icon-btn" data-close aria-label="סגירה">✕</button>
+      </div>
+      <div id="modalBody" class="modal-body"></div>
+      <div class="modal-actions" id="modalActions"></div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
