@@ -2,10 +2,3 @@ name = "tiyulim-site"
 compatibility_date = "2025-01-01"
 pages_build_output_dir = "public"
 
-# D1 database. Locally wrangler uses a local SQLite file under .wrangler/.
-# Before deploying: run `npx wrangler d1 create tiyulim-db` and paste the real database_id here.
-[[d1_databases]]
-binding = "DB"
-database_name = "tiyulim-db"
-database_id = "00000000-0000-0000-0000-000000000000"
-migrations_dir = "migrations"
