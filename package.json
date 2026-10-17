@@ -1,15 +1,31 @@
 {
   "name": "tiyulim-site",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "אתר חוג הטיולים של הכיתה – משימות, אחראים והתחשבנות",
+  "type": "module",
+  "description": "אתר חוג הטיולים של הכיתה – React + Vite + Cloudflare D1",
   "scripts": {
+    "build": "vite build",
+    "dev:vite": "vite",
     "db:migrate": "wrangler d1 migrations apply DB --local",
-    "dev": "wrangler pages dev public --port 8788",
+    "dev": "vite build && wrangler pages dev public --port 8788",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
-    "deploy": "wrangler pages deploy public"
+    "deploy": "vite build && wrangler pages deploy public"
+  },
+  "dependencies": {
+    "date-fns": "^3.6.0",
+    "lucide-react": "^0.454.0",
+    "react": "^18.3.1",
+    "react-day-picker": "^8.10.1",
+    "react-dom": "^18.3.1",
+    "react-select": "^5.8.1"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.3",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.14",
+    "vite": "^5.4.10",
     "wrangler": "^4.0.0"
   }
 }
