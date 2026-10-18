@@ -18,7 +18,7 @@ const TRIP_FIELDS = [
 ];
 const MEAL_FIELDS = ['title', 'responsible', 'phone', 'menu', 'helpers', 'tools', 'plan_received', 'sort'];
 const GEAR_FIELDS = ['item', 'needed_for', 'brought_by'];
-const EXPENSE_FIELDS = ['family_id', 'description', 'amount', 'included'];
+const EXPENSE_FIELDS = ['family_id', 'description', 'amount', 'included', 'split_families'];
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -62,6 +62,12 @@ async function ensureSchema(db) {
     brought_by TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now'))
   )`).run();
+
+  try {
+    await db.prepare(`ALTER TABLE expenses ADD COLUMN split_families TEXT DEFAULT ''`).run();
+  } catch (_) {
+    // Column already exists
+  }
 
   await db.prepare(`CREATE TABLE IF NOT EXISTS _app_migrations (
     name TEXT PRIMARY KEY,
@@ -116,18 +122,52 @@ async function route(request, env, parts) {
     return json({ families, trips, counts });
   }
 
+function normalizeFamilyName(raw) {
+  return String(raw || '')
+    .trim()
+    .replace(/^משפחת\s+/u, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
   // ---- families ----
   if (res === 'families') {
     if (method === 'POST' && !id) {
       const data = pick(body, FAMILY_FIELDS);
+      if (data.name) data.name = String(data.name).trim();
       if (!data.name) throw new HttpError(400, 'חסר שם משפחה');
+      const allFams = await all(db, 'SELECT id, name FROM families');
+      const norm = normalizeFamilyName(data.name);
+      if (allFams.some((f) => normalizeFamilyName(f.name) === norm)) {
+        throw new HttpError(409, 'שם המשפחה כבר קיים במערכת – נא להוסיף גם שמות פרטיים כדי להבדיל');
+      }
       return json({ id: await insert(db, 'families', data) });
     }
-    if (method === 'PUT' && id) { await update(db, 'families', id, pick(body, FAMILY_FIELDS)); return json({ ok: true }); }
+    if (method === 'PUT' && id) {
+      const data = pick(body, FAMILY_FIELDS);
+      if (data.name !== undefined) {
+        data.name = String(data.name).trim();
+        if (!data.name) throw new HttpError(400, 'חסר שם משפחה');
+        const allFams = await all(db, 'SELECT id, name FROM families WHERE id != ?', id);
+        const norm = normalizeFamilyName(data.name);
+        if (allFams.some((f) => normalizeFamilyName(f.name) === norm)) {
+          throw new HttpError(409, 'שם המשפחה כבר קיים במערכת – נא להוסיף גם שמות פרטיים כדי להבדיל');
+        }
+      }
+      const oldFam = await first(db, 'SELECT name FROM families WHERE id = ?', id);
+      await update(db, 'families', id, data);
+      if (data.name && oldFam && oldFam.name && oldFam.name !== data.name) {
+        await db.batch([
+          db.prepare('UPDATE meals SET responsible = ? WHERE responsible = ?').bind(data.name, oldFam.name),
+          db.prepare('UPDATE gear SET brought_by = ? WHERE brought_by = ?').bind(data.name, oldFam.name),
+        ]);
+      }
+      return json({ ok: true });
+    }
     if (method === 'DELETE' && id) {
-      const used = await first(db, 'SELECT COUNT(*) AS n FROM expenses WHERE family_id = ?', id);
-      if (used.n > 0) throw new HttpError(400, 'למשפחה יש הוצאות רשומות – אי אפשר למחוק אותה');
       await db.batch([
+        db.prepare('DELETE FROM expenses WHERE family_id = ?').bind(id),
         db.prepare('DELETE FROM participants WHERE family_id = ?').bind(id),
         db.prepare('DELETE FROM families WHERE id = ?').bind(id),
       ]);

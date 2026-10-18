@@ -1,12 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import {
   Tent, Calendar, MapPin, Compass, Users, Utensils, Wrench, Wallet,
-  Plus, Minus, Check, Trash2, Edit3, Share2, AlertCircle, UserPlus, LogOut
+  Plus, Minus, Check, Trash2, Edit3, Share2, AlertCircle, UserPlus, LogOut, Backpack
 } from 'lucide-react';
-import { api, formatMoney, getTripImage } from '../api';
+import { api, formatMoney, getTripImage, findDuplicateFamily } from '../api';
 import { formatHebrewRange } from './DateRangePicker';
 import CustomSelect from './CustomSelect';
 import Modal from './Modal';
+
+function parseSplitIds(raw, defaultIds) {
+  if (!raw) return defaultIds;
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed.map(Number).filter(Boolean);
+    }
+  } catch (_) {
+    // fallback to defaultIds
+  }
+  return defaultIds;
+}
 
 export default function FamilyTripPage({
   tripId,
@@ -31,7 +44,7 @@ export default function FamilyTripPage({
   const [roleModal, setRoleModal] = useState(null); // { id?, title, responsible, menu }
   const [gearModal, setGearModal] = useState(false);
   const [gearForm, setGearForm] = useState({ item: '', needed_for: '', i_bring: false });
-  const [expenseModal, setExpenseModal] = useState(null); // { id?, family_id, amount, description }
+  const [expenseModal, setExpenseModal] = useState(null); // { id?, family_id, amount, description, split_ids }
 
   const loadTrip = async () => {
     const d = await api('trips/' + tripId);
@@ -75,6 +88,9 @@ export default function FamilyTripPage({
     }
   };
 
+  const duplicateNewFam =
+    selectedFam === 'new' ? findDuplicateFamily(newFamName, families) : null;
+
   const handleJoinSubmit = async (e) => {
     e.preventDefault();
     let famId = selectedFam;
@@ -84,13 +100,22 @@ export default function FamilyTripPage({
         showToast('נא להזין שם משפחה');
         return;
       }
-      const created = await api('families', 'POST', {
-        name: newFamName.trim(),
-        adults: headcount,
-        kids: 0,
-        notes: notes.trim(),
-      });
-      famId = created.id;
+      if (duplicateNewFam) {
+        showToast('שם המשפחה כבר קיים – נא להוסיף שמות פרטיים');
+        return;
+      }
+      try {
+        const created = await api('families', 'POST', {
+          name: newFamName.trim(),
+          adults: headcount,
+          kids: 0,
+          notes: notes.trim(),
+        });
+        famId = created.id;
+      } catch (err) {
+        showToast(err.message);
+        return;
+      }
     } else {
       famId = Number(selectedFam);
     }
@@ -170,15 +195,40 @@ export default function FamilyTripPage({
 
             {selectedFam === 'new' && (
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">שם משפחה *</label>
-                <input
-                  type="text"
-                  autoFocus
-                  value={newFamName}
-                  onChange={(e) => setNewFamName(e.target.value)}
-                  placeholder="למשל: משפחת כהן"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-forest-500 focus:ring-2 focus:ring-forest-500/15"
-                />
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  שם משפחה (מומלץ להוסיף שמות פרטיים) *
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    autoFocus
+                    value={newFamName}
+                    onChange={(e) => setNewFamName(e.target.value)}
+                    aria-invalid={duplicateNewFam ? 'true' : undefined}
+                    aria-describedby={duplicateNewFam ? 'family-dup-note' : undefined}
+                    placeholder="למשל: כהן (דני ומיכל)"
+                    className={`w-full px-3.5 py-2.5 rounded-xl border transition focus:outline-none ${
+                      duplicateNewFam
+                        ? 'border-red-500 bg-red-50/40 text-red-900 pl-10 focus:border-red-600 focus:ring-2 focus:ring-red-500/20'
+                        : 'border-slate-200 focus:border-forest-500 focus:ring-2 focus:ring-forest-500/15'
+                    }`}
+                  />
+                  {duplicateNewFam && (
+                    <AlertCircle className="w-5 h-5 text-red-500 absolute left-3 top-2.5" />
+                  )}
+                </div>
+                {duplicateNewFam && (
+                  <p
+                    id="family-dup-note"
+                    role="alert"
+                    className="mt-1.5 text-xs font-medium text-red-600 flex items-start gap-1"
+                  >
+                    <span>❗</span>
+                    <span>
+                      שם המשפחה ״{duplicateNewFam.name}״ כבר קיים במערכת. אנא הוסיפו גם שמות פרטיים כדי שיהיה ייחודי (למשל: {newFamName.trim()} - דני ומיכל).
+                    </span>
+                  </p>
+                )}
               </div>
             )}
 
@@ -219,7 +269,8 @@ export default function FamilyTripPage({
 
             <button
               type="submit"
-              className="w-full py-3 rounded-xl bg-coral-500 hover:bg-coral-600 text-white font-bold text-base shadow-md shadow-coral-500/20 transition"
+              disabled={selectedFam === 'new' && !!duplicateNewFam}
+              className="w-full py-3 rounded-xl bg-coral-500 hover:bg-coral-600 text-white font-bold text-base shadow-md shadow-coral-500/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
               כניסה והרשמה לטיול ←
             </button>
@@ -243,6 +294,8 @@ export default function FamilyTripPage({
   // STEP 2: Streamlined Single-Page Trip Dashboard
   // ====================================================================
   const totalPeople = participants.reduce((s, p) => s + p.adults + p.kids, 0);
+  const myGearItems = gear.filter((g) => g.brought_by === myFamily.name);
+  const myAssignedRoles = meals.filter((m) => m.responsible === myFamily.name);
 
   // Roles handlers
   const handleTakeRole = async (roleId) => {
@@ -310,19 +363,58 @@ export default function FamilyTripPage({
     await loadTrip();
   };
 
-  // Expenses calculation & handlers
+  // Expenses calculation & handlers (Splitwise-style per-expense family selection)
   const incExpenses = expenses.filter((e) => e.included);
   const totalExpenses = incExpenses.reduce((s, e) => s + e.amount, 0);
   const peopleByFam = Object.fromEntries(participants.map((p) => [p.family_id, p.adults + p.kids]));
   const sharePerPerson = totalPeople ? totalExpenses / totalPeople : 0;
 
-  const allInvolvedIds = [...new Set([...participants.map((p) => p.family_id), ...incExpenses.map((e) => e.family_id)])];
+  // Default families for splitting: all trip participants (or all families if none joined yet)
+  const defaultSplitIds =
+    participants.length > 0
+      ? participants.map((p) => Number(p.family_id))
+      : families.map((f) => Number(f.id));
+
+  // Calculate how much each family owes across all expenses (proportional to family size in each expense)
+  const owedByFam = {};
+  const paidByFam = {};
+  const involvedSet = new Set(participants.map((p) => Number(p.family_id)));
+
+  for (const e of incExpenses) {
+    const payerId = Number(e.family_id);
+    involvedSet.add(payerId);
+    paidByFam[payerId] = (paidByFam[payerId] || 0) + Number(e.amount);
+
+    const splitIds = parseSplitIds(e.split_families, defaultSplitIds);
+    for (const fid of splitIds) involvedSet.add(Number(fid));
+
+    const getWeight = (fid) => {
+      if (peopleByFam[fid] !== undefined) return peopleByFam[fid];
+      const f = families.find((x) => x.id === Number(fid));
+      return f ? (f.adults || 0) + (f.kids || 0) || 1 : 1;
+    };
+
+    const expPeople = splitIds.reduce((sum, fid) => sum + getWeight(fid), 0);
+    if (expPeople > 0) {
+      for (const fid of splitIds) {
+        const w = getWeight(fid);
+        owedByFam[fid] = (owedByFam[fid] || 0) + Number(e.amount) * (w / expPeople);
+      }
+    }
+  }
+
+  const allInvolvedIds = [...involvedSet];
   const balanceRows = allInvolvedIds
     .map((fid) => {
       const f = families.find((x) => x.id === Number(fid));
-      const n = peopleByFam[fid] || 0;
-      const paid = incExpenses.filter((e) => e.family_id === Number(fid)).reduce((s, e) => s + e.amount, 0);
-      const owe = sharePerPerson * n;
+      const n =
+        peopleByFam[fid] !== undefined
+          ? peopleByFam[fid]
+          : f
+          ? (f.adults || 0) + (f.kids || 0)
+          : 0;
+      const paid = paidByFam[fid] || 0;
+      const owe = owedByFam[fid] || 0;
       return { id: fid, name: f?.name || 'משפחה', n, paid, owe, bal: owe - paid };
     })
     .sort((a, b) => b.bal - a.bal);
@@ -348,11 +440,21 @@ export default function FamilyTripPage({
       showToast('נא למלא סכום ופירוט');
       return;
     }
+    const splitIds = expenseModal.split_ids || [];
+    if (splitIds.length === 0) {
+      showToast('נא לבחור לפחות משפחה אחת שמשתתפת בהוצאה');
+      return;
+    }
+    const isAllDefault =
+      splitIds.length === defaultSplitIds.length &&
+      defaultSplitIds.every((id) => splitIds.includes(Number(id)));
+
     const payload = {
       family_id: Number(expenseModal.family_id),
       amount: amountNum,
       description: expenseModal.description.trim(),
       included: 1,
+      split_families: isAllDefault ? '' : JSON.stringify(splitIds.map(Number)),
     };
     if (expenseModal.id) {
       await api('expenses/' + expenseModal.id, 'PUT', payload);
@@ -369,10 +471,18 @@ export default function FamilyTripPage({
     await loadTrip();
   };
 
+  const toggleExpenseSplitFamily = (fid) => {
+    const numId = Number(fid);
+    const current = expenseModal?.split_ids || [];
+    const exists = current.includes(numId);
+    const next = exists ? current.filter((x) => x !== numId) : [...current, numId];
+    setExpenseModal({ ...expenseModal, split_ids: next });
+  };
+
   const shareSettlementWhatsApp = () => {
     const text = [
       `💰 *סיכום הוצאות – ${trip.name}*`,
-      `סך הוצאות: ${formatMoney(totalExpenses)} · משתתפים: ${totalPeople} · למשתתף: ${formatMoney(sharePerPerson)}`,
+      `סך הוצאות: ${formatMoney(totalExpenses)} · משתתפים: ${totalPeople}`,
       '',
       ...transfers.map((x) => `• ${x.from} ← ${x.to}: ${formatMoney(x.amt)}`),
     ].join('\n');
@@ -390,6 +500,17 @@ export default function FamilyTripPage({
     { value: '', label: 'כללי' },
     ...meals.map((m) => ({ value: m.title, label: m.title })),
   ];
+
+  // Candidate families to show in Expense split selector (trip participants first, plus any other families)
+  const splitCandidateFamilies =
+    participants.length > 0
+      ? participants
+          .map((p) => {
+            const f = families.find((x) => x.id === p.family_id);
+            return f ? { id: f.id, name: f.name, count: p.adults + p.kids } : null;
+          })
+          .filter(Boolean)
+      : families.map((f) => ({ id: f.id, name: f.name, count: (f.adults || 0) + (f.kids || 0) }));
 
   return (
     <div className="space-y-8">
@@ -485,6 +606,119 @@ export default function FamilyTripPage({
         </div>
       </section>
 
+      {/* 1.5 My Family's Personal Packing / Responsibility List */}
+      <section className="bg-gradient-to-l from-forest-50 via-white to-sun-50/70 rounded-3xl p-5 sm:p-6 border border-forest-200/80 shadow-xs space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-forest-500 text-white flex items-center justify-center shadow-2xs">
+              <Backpack className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-extrabold text-slate-800">
+                מה באחריותנו להכין ולהביא? ({myFamily.name})
+              </h2>
+              <p className="text-xs text-slate-500">
+                ריכוז אישי של הכלים, המצרכים והתפקידים שלקחתם על עצמכם לטיול
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setGearForm({ item: '', needed_for: '', i_bring: true });
+              setGearModal(true);
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-forest-200 hover:border-forest-500 text-forest-700 text-xs font-semibold transition"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            הוספת כלי / פריט שאנחנו מביאים
+          </button>
+        </div>
+
+        {myGearItems.length === 0 && myAssignedRoles.length === 0 ? (
+          <div className="bg-white/80 rounded-2xl border border-dashed border-slate-200 p-4 text-center text-xs text-slate-500">
+            עדיין לא משויכים אליכם כלים או תפקידים. כל כלי או מצרך שתסמנו ״אנחנו נביא!״ ברשימה למטה יופיע כאן באופן אוטומטי כדי שתוכלו להתארגן בקלות ליציאה.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* My Tools & Items to Bring */}
+            <div className="bg-white rounded-2xl p-4 border border-slate-100 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-forest-700 flex items-center gap-1.5">
+                  <Wrench className="w-3.5 h-3.5" />
+                  כלים ומצרכים להבאה ({myGearItems.length})
+                </span>
+              </div>
+              {myGearItems.length === 0 ? (
+                <p className="text-xs text-slate-400">לא נבחרו כלים או מצרכים להבאה עדיין.</p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {myGearItems.map((g) => (
+                    <li
+                      key={g.id}
+                      className="flex items-center justify-between gap-2 bg-forest-50/60 px-3 py-2 rounded-xl text-xs"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="w-4 h-4 rounded-full bg-forest-500 text-white flex items-center justify-center text-[10px]">
+                          ✓
+                        </span>
+                        <span className="font-bold text-slate-800">{g.item}</span>
+                        {g.needed_for && (
+                          <span className="px-2 py-0.5 rounded-full bg-white text-slate-600 border border-slate-200/80 text-[11px]">
+                            {g.needed_for}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleUnclaimGear(g.id)}
+                        className="text-[11px] text-slate-400 hover:text-red-600 transition"
+                      >
+                        הסרה
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {/* My Assigned Meals / Roles */}
+            <div className="bg-white rounded-2xl p-4 border border-slate-100 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-coral-600 flex items-center gap-1.5">
+                  <Utensils className="w-3.5 h-3.5" />
+                  תפקידים וארוחות באחריותנו ({myAssignedRoles.length})
+                </span>
+              </div>
+              {myAssignedRoles.length === 0 ? (
+                <p className="text-xs text-slate-400">לא לקחתם אחריות על ארוחה או תפקיד עדיין.</p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {myAssignedRoles.map((m) => (
+                    <li
+                      key={m.id}
+                      className="flex items-center justify-between gap-2 bg-coral-50/50 px-3 py-2 rounded-xl text-xs"
+                    >
+                      <div>
+                        <div className="font-bold text-slate-800">{m.title}</div>
+                        {m.menu && <div className="text-slate-500 mt-0.5">{m.menu}</div>}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setRoleModal(m)}
+                        className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-medium text-slate-600 hover:text-slate-900"
+                      >
+                        עריכת תפריט
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
+
       {/* 2. Roles Section */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
@@ -573,7 +807,10 @@ export default function FamilyTripPage({
           </div>
           <button
             type="button"
-            onClick={() => setGearModal(true)}
+            onClick={() => {
+              setGearForm({ item: '', needed_for: '', i_bring: false });
+              setGearModal(true);
+            }}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-sun-500 hover:bg-amber-400 text-slate-900 font-semibold text-xs shadow-2xs transition"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -663,6 +900,7 @@ export default function FamilyTripPage({
                 family_id: String(myFamily.id),
                 amount: '',
                 description: '',
+                split_ids: defaultSplitIds,
               })
             }
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-coral-500 hover:bg-coral-600 text-white font-semibold text-xs shadow-2xs transition"
@@ -682,8 +920,10 @@ export default function FamilyTripPage({
             <div className="text-xs text-slate-500 mt-0.5">משתתפים</div>
           </div>
           <div className="bg-white rounded-2xl p-4 border border-slate-200/80 text-center">
-            <div className="text-xl font-extrabold text-coral-500">{formatMoney(sharePerPerson)}</div>
-            <div className="text-xs text-slate-500 mt-0.5">עלות למשתתף</div>
+            <div className="text-xl font-extrabold text-coral-500">
+              {formatMoney(owedByFam[myFamily.id] || 0)}
+            </div>
+            <div className="text-xs text-slate-500 mt-0.5">החלק שלנו ({myFamily.name})</div>
           </div>
         </div>
 
@@ -694,6 +934,7 @@ export default function FamilyTripPage({
                 <tr>
                   <th className="py-2.5 px-4 text-right font-medium">מי שילם</th>
                   <th className="py-2.5 px-4 text-right font-medium">עבור מה</th>
+                  <th className="py-2.5 px-4 text-right font-medium">משתתפים בהוצאה</th>
                   <th className="py-2.5 px-4 text-right font-medium">סכום</th>
                   <th className="py-2.5 px-3"></th>
                 </tr>
@@ -701,10 +942,33 @@ export default function FamilyTripPage({
               <tbody className="divide-y divide-slate-100">
                 {expenses.map((e) => {
                   const f = families.find((x) => x.id === e.family_id);
+                  const splitIds = parseSplitIds(e.split_families, defaultSplitIds);
+                  const isAll =
+                    !e.split_families ||
+                    (splitIds.length === defaultSplitIds.length &&
+                      defaultSplitIds.every((id) => splitIds.includes(Number(id))));
+                  const splitNames = splitIds
+                    .map((id) => families.find((x) => x.id === Number(id))?.name)
+                    .filter(Boolean);
+
                   return (
                     <tr key={e.id}>
                       <td className="py-2.5 px-4 font-semibold text-slate-800">{f?.name || 'משפחה'}</td>
                       <td className="py-2.5 px-4 text-slate-600">{e.description}</td>
+                      <td className="py-2.5 px-4 text-xs">
+                        {isAll ? (
+                          <span className="px-2 py-0.5 rounded-full bg-forest-50 text-forest-700 font-medium">
+                            כל המשתתפים
+                          </span>
+                        ) : (
+                          <span
+                            className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 font-medium inline-block max-w-xs truncate"
+                            title={splitNames.join(', ')}
+                          >
+                            {splitNames.length} משפחות: {splitNames.join(', ')}
+                          </span>
+                        )}
+                      </td>
                       <td className="py-2.5 px-4 font-bold text-slate-800">{formatMoney(e.amount)}</td>
                       <td className="py-2.5 px-3 text-left">
                         <button
@@ -715,6 +979,7 @@ export default function FamilyTripPage({
                               family_id: String(e.family_id),
                               amount: e.amount,
                               description: e.description,
+                              split_ids: splitIds,
                             })
                           }
                           className="p-1 text-slate-400 hover:text-slate-700"
@@ -733,13 +998,15 @@ export default function FamilyTripPage({
         {totalExpenses > 0 && balanceRows.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-white rounded-2xl border border-slate-200/80 p-4 space-y-2">
-              <h3 className="text-sm font-bold text-slate-700">מאזן לפי גודל משפחה</h3>
+              <h3 className="text-sm font-bold text-slate-700">מאזן לפי גודל משפחה והוצאות</h3>
               <div className="divide-y divide-slate-100 text-xs">
                 {balanceRows.map((r) => (
                   <div key={r.id} className="py-2 flex items-center justify-between">
                     <div>
                       <span className="font-bold text-slate-800">{r.name}</span>
-                      <span className="text-slate-400 mr-1.5">({r.n} נפשות · שילמו {formatMoney(r.paid)})</span>
+                      <span className="text-slate-400 mr-1.5">
+                        ({r.n} נפשות · שילמו {formatMoney(r.paid)} · חלקם {formatMoney(r.owe)})
+                      </span>
                     </div>
                     <span
                       className={`font-bold ${
@@ -961,6 +1228,42 @@ export default function FamilyTripPage({
                 onChange={(e) => setExpenseModal({ ...expenseModal, description: e.target.value })}
                 placeholder="מצרכים לארוחת ערב..."
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-forest-500"
+              />
+            </div>
+
+            {/* Splitwise-style Multi-Select Family Selector */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium text-slate-700">
+                  עבור אילו משפחות ההוצאה? ({(expenseModal.split_ids || []).length}/{splitCandidateFamilies.length})
+                </label>
+                {(expenseModal.split_ids || []).length < splitCandidateFamilies.length && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpenseModal({
+                        ...expenseModal,
+                        split_ids: splitCandidateFamilies.map((f) => Number(f.id)),
+                      })
+                    }
+                    className="text-xs font-semibold text-forest-600 hover:text-forest-700"
+                  >
+                    בחירת כל המשפחות
+                  </button>
+                )}
+              </div>
+              <CustomSelect
+                isMulti
+                isClearable
+                options={splitCandidateFamilies.map((f) => ({
+                  value: Number(f.id),
+                  label: `${f.name} (${f.count})`,
+                }))}
+                value={expenseModal.split_ids || []}
+                onChange={(vals) =>
+                  setExpenseModal({ ...expenseModal, split_ids: (vals || []).map(Number) })
+                }
+                placeholder="בחרו משפחות שמשתתפות בהוצאה..."
               />
             </div>
 

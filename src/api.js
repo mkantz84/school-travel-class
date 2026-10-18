@@ -38,3 +38,24 @@ export function getTripImage(trip) {
   }
   return TRIP_IMAGES[hash % TRIP_IMAGES.length];
 }
+
+export function normalizeFamilyName(raw) {
+  return String(raw || '')
+    .trim()
+    .replace(/^משפחת\s+/u, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+export function findDuplicateFamily(name, families = [], excludeId = null) {
+  const norm = normalizeFamilyName(name);
+  if (!norm) return null;
+  return (
+    families.find(
+      (f) =>
+        (excludeId == null || String(f.id) !== String(excludeId)) &&
+        normalizeFamilyName(f.name) === norm
+    ) || null
+  );
+}

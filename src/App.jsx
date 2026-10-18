@@ -89,6 +89,7 @@ export default function App() {
           <CreatorPage
             tripId={id}
             trips={base.trips}
+            families={base.families}
             counts={base.counts}
             onRefresh={loadBase}
             showToast={showToast}
