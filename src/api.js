@@ -18,6 +18,9 @@ const TRIP_IMAGES = ['/img/hero.jpg', '/img/water.jpg', '/img/forest.jpg', '/img
 
 export function getTripImage(trip) {
   if (!trip) return '/img/hero.jpg';
+  if (trip.image_url && String(trip.image_url).trim()) {
+    return trip.image_url;
+  }
   const text = `${trip.name || ''} ${trip.destination || ''} ${trip.lodging || ''}`;
 
   if (/מדבר|נגב|ערבה|מכתש|אילת|ים המלח|מצדה|דרום|רמון|צין|פארן|חوارים|חוורים|תמנע|שדה בוקר/.test(text)) {
