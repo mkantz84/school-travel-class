@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Tent, Calendar, MapPin, Compass, Users, Utensils, Wrench, Wallet,
   Plus, Minus, Check, Trash2, Edit3, Share2, AlertCircle, UserPlus, LogOut, Backpack
@@ -6,7 +6,7 @@ import {
 import { api, formatMoney, getTripImage, findDuplicateFamily } from '../api';
 import { formatHebrewRange } from './DateRangePicker';
 import CustomSelect from './CustomSelect';
-import Modal from './Modal';
+import Modal, { ConfirmDeleteModal } from './Modal';
 
 function parseSplitIds(raw, defaultIds) {
   if (!raw) return defaultIds;
@@ -33,6 +33,7 @@ export default function FamilyTripPage({
 }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const currentTripIdRef = useRef(tripId);
 
   // Onboarding state
   const [selectedFam, setSelectedFam] = useState('new');
@@ -45,16 +46,25 @@ export default function FamilyTripPage({
   const [gearModal, setGearModal] = useState(false);
   const [gearForm, setGearForm] = useState({ item: '', needed_for: '', i_bring: false });
   const [expenseModal, setExpenseModal] = useState(null); // { id?, family_id, amount, description, split_ids }
+  const [confirmDelete, setConfirmDelete] = useState(null); // { tripId, title, message, confirmLabel, onConfirm }
+  const [deleting, setDeleting] = useState(false);
 
-  const loadTrip = async () => {
-    const d = await api('trips/' + tripId);
+  const loadTrip = async (targetTripId = tripId) => {
+    const d = await api('trips/' + targetTripId);
+    if (String(currentTripIdRef.current) !== String(targetTripId)) return;
     setData(d);
     setLoading(false);
   };
 
   useEffect(() => {
+    currentTripIdRef.current = tripId;
+    setConfirmDelete(null);
+    setDeleting(false);
+    setRoleModal(null);
+    setGearModal(false);
+    setExpenseModal(null);
     setLoading(true);
-    loadTrip();
+    loadTrip(tripId);
   }, [tripId]);
 
   const myFamily = families.find((f) => f.id === Number(meId)) || null;
@@ -134,12 +144,42 @@ export default function FamilyTripPage({
     showToast('נרשמתם לטיול! 🎉');
   };
 
-  const handleLeaveTrip = async () => {
+  const executeConfirmedDelete = async () => {
+    if (!confirmDelete?.onConfirm) return;
+    if (String(confirmDelete.tripId) !== String(currentTripIdRef.current)) {
+      setConfirmDelete(null);
+      return;
+    }
+    setDeleting(true);
+    try {
+      await confirmDelete.onConfirm();
+    } catch (err) {
+      showToast(err.message);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const requestLeaveTrip = () => {
     if (!myFamily) return;
-    await api(`trips/${tripId}/participants/${myFamily.id}`, 'DELETE');
-    localStorage.removeItem(`joinedTrip_${tripId}`);
-    await onRefreshBase();
-    await loadTrip();
+    const capturedTripId = tripId;
+    const capturedFamilyId = myFamily.id;
+    const capturedFamilyName = myFamily.name;
+    setConfirmDelete({
+      tripId: capturedTripId,
+      title: 'ביטול הגעה לטיול',
+      message: `האם אתם בטוחים שברצונכם להסיר את משפחת "${capturedFamilyName}" מרשימת המשתתפים בטיול?`,
+      confirmLabel: 'כן, בטלו הגעה',
+      onConfirm: async () => {
+        if (String(currentTripIdRef.current) !== String(capturedTripId)) return;
+        await api(`trips/${capturedTripId}/participants/${capturedFamilyId}`, 'DELETE');
+        localStorage.removeItem(`joinedTrip_${capturedTripId}`);
+        setConfirmDelete(null);
+        showToast('הגעתכם לטיול בוטלה');
+        await onRefreshBase();
+        await loadTrip(capturedTripId);
+      },
+    });
   };
 
   if (loading || !data) {
@@ -303,9 +343,22 @@ export default function FamilyTripPage({
     await loadTrip();
   };
 
-  const handleRemoveRole = async (roleId) => {
-    await api('meals/' + roleId, 'PUT', { responsible: '', phone: '' });
-    await loadTrip();
+  const requestRemoveRole = (role) => {
+    const capturedTripId = tripId;
+    const capturedRoleId = role.id;
+    setConfirmDelete({
+      tripId: capturedTripId,
+      title: 'הסרת אחריות מתפקיד',
+      message: `האם אתם בטוחים שברצונכם להסיר את "${role.responsible}" מאחריות על "${role.title}"?`,
+      confirmLabel: 'כן, הסירו אחריות',
+      onConfirm: async () => {
+        if (String(currentTripIdRef.current) !== String(capturedTripId)) return;
+        await api('meals/' + capturedRoleId, 'PUT', { responsible: '', phone: '' });
+        setConfirmDelete(null);
+        showToast('האחריות הוסרה מהתפקיד');
+        await loadTrip(capturedTripId);
+      },
+    });
   };
 
   const handleSaveRole = async (e) => {
@@ -328,10 +381,23 @@ export default function FamilyTripPage({
     await loadTrip();
   };
 
-  const handleDeleteRole = async (id) => {
-    await api('meals/' + id, 'DELETE');
-    setRoleModal(null);
-    await loadTrip();
+  const requestDeleteRole = (role) => {
+    const capturedTripId = tripId;
+    const capturedRoleId = role.id;
+    setConfirmDelete({
+      tripId: capturedTripId,
+      title: 'מחיקת תפקיד',
+      message: `האם אתם בטוחים שברצונכם למחוק את התפקיד "${role.title}" מהטיול?`,
+      confirmLabel: 'כן, מחקו תפקיד',
+      onConfirm: async () => {
+        if (String(currentTripIdRef.current) !== String(capturedTripId)) return;
+        await api('meals/' + capturedRoleId, 'DELETE');
+        setConfirmDelete(null);
+        setRoleModal(null);
+        showToast('התפקיד נמחק 🗑️');
+        await loadTrip(capturedTripId);
+      },
+    });
   };
 
   // Gear handlers
@@ -353,14 +419,40 @@ export default function FamilyTripPage({
     await loadTrip();
   };
 
-  const handleUnclaimGear = async (id) => {
-    await api('gear/' + id, 'PUT', { brought_by: '' });
-    await loadTrip();
+  const requestUnclaimGear = (gearItem) => {
+    const capturedTripId = tripId;
+    const capturedGearId = gearItem.id;
+    setConfirmDelete({
+      tripId: capturedTripId,
+      title: 'הסרת אחריות מפריט',
+      message: `האם אתם בטוחים שברצונכם להסיר את האחריות של "${gearItem.brought_by}" מהבאת "${gearItem.item}"?`,
+      confirmLabel: 'כן, הסירו אחריות',
+      onConfirm: async () => {
+        if (String(currentTripIdRef.current) !== String(capturedTripId)) return;
+        await api('gear/' + capturedGearId, 'PUT', { brought_by: '' });
+        setConfirmDelete(null);
+        showToast('האחריות הוסרה מהפריט');
+        await loadTrip(capturedTripId);
+      },
+    });
   };
 
-  const handleDeleteGear = async (id) => {
-    await api('gear/' + id, 'DELETE');
-    await loadTrip();
+  const requestDeleteGear = (gearItem) => {
+    const capturedTripId = tripId;
+    const capturedGearId = gearItem.id;
+    setConfirmDelete({
+      tripId: capturedTripId,
+      title: 'מחיקת פריט מרשימת הציוד',
+      message: `האם אתם בטוחים שברצונכם למחוק את "${gearItem.item}" מרשימת הכלים והמצרכים?`,
+      confirmLabel: 'כן, מחקו פריט',
+      onConfirm: async () => {
+        if (String(currentTripIdRef.current) !== String(capturedTripId)) return;
+        await api('gear/' + capturedGearId, 'DELETE');
+        setConfirmDelete(null);
+        showToast('הפריט נמחק 🗑️');
+        await loadTrip(capturedTripId);
+      },
+    });
   };
 
   // Expenses calculation & handlers (Splitwise-style per-expense family selection)
@@ -465,10 +557,23 @@ export default function FamilyTripPage({
     await loadTrip();
   };
 
-  const handleDeleteExpense = async (id) => {
-    await api('expenses/' + id, 'DELETE');
-    setExpenseModal(null);
-    await loadTrip();
+  const requestDeleteExpense = (expense) => {
+    const capturedTripId = tripId;
+    const capturedExpenseId = expense.id;
+    setConfirmDelete({
+      tripId: capturedTripId,
+      title: 'מחיקת הוצאה',
+      message: `האם אתם בטוחים שברצונכם למחוק את ההוצאה "${expense.description}" (${formatMoney(expense.amount)})?`,
+      confirmLabel: 'כן, מחקו הוצאה',
+      onConfirm: async () => {
+        if (String(currentTripIdRef.current) !== String(capturedTripId)) return;
+        await api('expenses/' + capturedExpenseId, 'DELETE');
+        setConfirmDelete(null);
+        setExpenseModal(null);
+        showToast('ההוצאה נמחקה 🗑️');
+        await loadTrip(capturedTripId);
+      },
+    });
   };
 
   const toggleExpenseSplitFamily = (fid) => {
@@ -596,7 +701,7 @@ export default function FamilyTripPage({
             </div>
             <button
               type="button"
-              onClick={handleLeaveTrip}
+              onClick={requestLeaveTrip}
               className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-red-600 transition"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -671,7 +776,7 @@ export default function FamilyTripPage({
                       </div>
                       <button
                         type="button"
-                        onClick={() => handleUnclaimGear(g.id)}
+                        onClick={() => requestUnclaimGear(g)}
                         className="text-[11px] text-slate-400 hover:text-red-600 transition"
                       >
                         הסרה
@@ -784,7 +889,7 @@ export default function FamilyTripPage({
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleRemoveRole(m.id)}
+                        onClick={() => requestRemoveRole(m)}
                         className="px-2 py-0.5 rounded-md bg-white text-red-600 hover:bg-red-50 text-[11px] font-medium border border-red-200"
                       >
                         הסרה
@@ -864,7 +969,7 @@ export default function FamilyTripPage({
                         </span>
                         <button
                           type="button"
-                          onClick={() => handleUnclaimGear(g.id)}
+                          onClick={() => requestUnclaimGear(g)}
                           className="px-2 py-1 rounded-lg border border-slate-200 text-xs text-slate-500 hover:bg-slate-50"
                         >
                           ביטול
@@ -873,8 +978,9 @@ export default function FamilyTripPage({
                     )}
                     <button
                       type="button"
-                      onClick={() => handleDeleteGear(g.id)}
+                      onClick={() => requestDeleteGear(g)}
                       className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
+                      title="מחיקת פריט"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -971,21 +1077,32 @@ export default function FamilyTripPage({
                       </td>
                       <td className="py-2.5 px-4 font-bold text-slate-800">{formatMoney(e.amount)}</td>
                       <td className="py-2.5 px-3 text-left">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setExpenseModal({
-                              id: e.id,
-                              family_id: String(e.family_id),
-                              amount: e.amount,
-                              description: e.description,
-                              split_ids: splitIds,
-                            })
-                          }
-                          className="p-1 text-slate-400 hover:text-slate-700"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpenseModal({
+                                id: e.id,
+                                family_id: String(e.family_id),
+                                amount: e.amount,
+                                description: e.description,
+                                split_ids: splitIds,
+                              })
+                            }
+                            className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+                            title="עריכת הוצאה"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => requestDeleteExpense(e)}
+                            className="p-1 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50"
+                            title="מחיקת הוצאה"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1108,7 +1225,7 @@ export default function FamilyTripPage({
               {roleModal.id ? (
                 <button
                   type="button"
-                  onClick={() => handleDeleteRole(roleModal.id)}
+                  onClick={() => requestDeleteRole(roleModal)}
                   className="px-3 py-2 rounded-xl text-xs font-semibold text-red-600 hover:bg-red-50"
                 >
                   מחיקת תפקיד
@@ -1271,7 +1388,7 @@ export default function FamilyTripPage({
               {expenseModal.id ? (
                 <button
                   type="button"
-                  onClick={() => handleDeleteExpense(expenseModal.id)}
+                  onClick={() => requestDeleteExpense(expenseModal)}
                   className="px-3 py-2 rounded-xl text-xs font-semibold text-red-600 hover:bg-red-50"
                 >
                   מחיקת הוצאה
@@ -1296,6 +1413,17 @@ export default function FamilyTripPage({
           </form>
         )}
       </Modal>
+
+      {/* Delete / Remove Confirmation Modal */}
+      <ConfirmDeleteModal
+        open={!!confirmDelete}
+        onClose={() => !deleting && setConfirmDelete(null)}
+        onConfirm={executeConfirmedDelete}
+        title={confirmDelete?.title}
+        message={confirmDelete?.message}
+        confirmLabel={confirmDelete?.confirmLabel}
+        loading={deleting}
+      />
     </div>
   );
 }

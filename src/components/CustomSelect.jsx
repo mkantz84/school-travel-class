@@ -22,7 +22,7 @@ export const selectStyles = {
     overflow: 'hidden',
     boxShadow: '0 12px 32px rgba(15, 23, 42, 0.12)',
     border: '1px solid #f1f5f9',
-    zIndex: 50,
+    zIndex: 9999,
   }),
   option: (base, state) => ({
     ...base,
@@ -130,6 +130,7 @@ export default function CustomSelect({
   isSearchable = true,
   isMulti = false,
   closeMenuOnSelect,
+  portal = false,
 }) {
   const multiOptions =
     isMulti && options.length > 1
@@ -173,7 +174,7 @@ export default function CustomSelect({
           : undefined
       }
       noOptionsMessage={() => 'לא נמצאו תוצאות'}
-      menuPortalTarget={typeof document !== 'undefined' ? document.body : null}
+      menuPortalTarget={portal && typeof document !== 'undefined' ? document.body : null}
       menuPosition="fixed"
       styles={selectStyles}
     />

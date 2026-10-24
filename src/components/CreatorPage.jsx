@@ -4,7 +4,7 @@ import {
 } from 'lucide-react';
 import { api, getTripImage, findDuplicateFamily } from '../api';
 import DateRangePicker, { formatHebrewRange } from './DateRangePicker';
-import Modal from './Modal';
+import Modal, { ConfirmDeleteModal } from './Modal';
 
 const EMPTY_TRIP = {
   name: '',
@@ -22,6 +22,8 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
   const [newModalOpen, setNewModalOpen] = useState(false);
   const [newForm, setNewForm] = useState(EMPTY_TRIP);
   const [familyModal, setFamilyModal] = useState(null); // { id?, name, adults, notes }
+  const [confirmDelete, setConfirmDelete] = useState(null); // { title, message, onConfirm }
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (tripId) {
@@ -80,12 +82,20 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
     }
   };
 
-  const handleDeleteTrip = async (id) => {
-    await api('trips/' + id, 'DELETE');
-    await onRefresh();
-    if (String(id) === String(tripId)) {
-      window.location.hash = '#/admin';
-    }
+  const requestDeleteTrip = (trip) => {
+    setConfirmDelete({
+      title: 'מחיקת טיול',
+      message: `האם אתם בטוחים שברצונכם למחוק את הטיול ״${trip.name}״? כל נתוני המשתתפים, התפקידים וההוצאות של הטיול יימחקו לצמיתות.`,
+      onConfirm: async () => {
+        await api('trips/' + trip.id, 'DELETE');
+        setConfirmDelete(null);
+        showToast('הטיול נמחק');
+        if (String(trip.id) === String(tripId)) {
+          window.location.hash = '#/admin';
+        }
+        await onRefresh();
+      },
+    });
   };
 
   const handleSaveFamily = async (e) => {
@@ -124,14 +134,29 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
     }
   };
 
-  const handleDeleteFamily = async (id) => {
+  const requestDeleteFamily = (fam) => {
+    setConfirmDelete({
+      title: 'מחיקת משפחה',
+      message: `האם אתם בטוחים שברצונכם למחוק את המשפחה ״${fam.name}״ מהמערכת? פעולה זו תסיר אותה גם מרשימות המשתתפים ותמחק את ההוצאות ששולמו על ידה בכל הטיולים (מה שישפיע על חישובי ההוצאות והחובות).`,
+      onConfirm: async () => {
+        await api('families/' + fam.id, 'DELETE');
+        setConfirmDelete(null);
+        setFamilyModal(null);
+        showToast('המשפחה נמחקה');
+        await onRefresh();
+      },
+    });
+  };
+
+  const executeConfirmedDelete = async () => {
+    if (!confirmDelete?.onConfirm) return;
+    setDeleting(true);
     try {
-      await api('families/' + id, 'DELETE');
-      setFamilyModal(null);
-      await onRefresh();
-      showToast('המשפחה נמחקה');
+      await confirmDelete.onConfirm();
     } catch (err) {
       showToast(err.message);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -419,7 +444,7 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
                     </a>
                     <button
                       type="button"
-                      onClick={() => handleDeleteTrip(t.id)}
+                      onClick={() => requestDeleteTrip(t)}
                       className="p-2 rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 transition"
                       title="מחיקה"
                     >
@@ -503,7 +528,7 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleDeleteFamily(f.id)}
+                        onClick={() => requestDeleteFamily(f)}
                         className="p-1.5 rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 transition"
                         title="מחיקת משפחה"
                       >
@@ -668,7 +693,7 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
               {familyModal.id ? (
                 <button
                   type="button"
-                  onClick={() => handleDeleteFamily(familyModal.id)}
+                  onClick={() => requestDeleteFamily(familyModal)}
                   className="px-3 py-2 rounded-xl text-xs font-semibold text-red-600 hover:bg-red-50"
                 >
                   מחיקת משפחה
@@ -696,6 +721,15 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
           </form>
         )}
       </Modal>
+
+      <ConfirmDeleteModal
+        open={!!confirmDelete}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={executeConfirmedDelete}
+        title={confirmDelete?.title}
+        message={confirmDelete?.message}
+        loading={deleting}
+      />
     </div>
   );
 }
