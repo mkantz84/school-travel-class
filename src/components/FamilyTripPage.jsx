@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Tent, Calendar, MapPin, Compass, Users, Utensils, Wrench, Wallet,
   Plus, Minus, Check, Trash2, Edit3, Share2, AlertCircle, UserPlus, LogOut, Backpack
@@ -33,6 +33,7 @@ export default function FamilyTripPage({
 }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const currentTripIdRef = useRef(tripId);
 
   // Onboarding state
   const [selectedFam, setSelectedFam] = useState('new');
@@ -45,18 +46,25 @@ export default function FamilyTripPage({
   const [gearModal, setGearModal] = useState(false);
   const [gearForm, setGearForm] = useState({ item: '', needed_for: '', i_bring: false });
   const [expenseModal, setExpenseModal] = useState(null); // { id?, family_id, amount, description, split_ids }
-  const [confirmDelete, setConfirmDelete] = useState(null); // { title, message, confirmLabel, onConfirm }
+  const [confirmDelete, setConfirmDelete] = useState(null); // { tripId, title, message, confirmLabel, onConfirm }
   const [deleting, setDeleting] = useState(false);
 
-  const loadTrip = async () => {
-    const d = await api('trips/' + tripId);
+  const loadTrip = async (targetTripId = tripId) => {
+    const d = await api('trips/' + targetTripId);
+    if (String(currentTripIdRef.current) !== String(targetTripId)) return;
     setData(d);
     setLoading(false);
   };
 
   useEffect(() => {
+    currentTripIdRef.current = tripId;
+    setConfirmDelete(null);
+    setDeleting(false);
+    setRoleModal(null);
+    setGearModal(false);
+    setExpenseModal(null);
     setLoading(true);
-    loadTrip();
+    loadTrip(tripId);
   }, [tripId]);
 
   const myFamily = families.find((f) => f.id === Number(meId)) || null;
@@ -136,24 +144,40 @@ export default function FamilyTripPage({
     showToast('נרשמתם לטיול! 🎉');
   };
 
+  const executeConfirmedDelete = async () => {
+    if (!confirmDelete?.onConfirm) return;
+    if (String(confirmDelete.tripId) !== String(currentTripIdRef.current)) {
+      setConfirmDelete(null);
+      return;
+    }
+    setDeleting(true);
+    try {
+      await confirmDelete.onConfirm();
+    } catch (err) {
+      showToast(err.message);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const requestLeaveTrip = () => {
     if (!myFamily) return;
+    const capturedTripId = tripId;
+    const capturedFamilyId = myFamily.id;
+    const capturedFamilyName = myFamily.name;
     setConfirmDelete({
+      tripId: capturedTripId,
       title: 'ביטול הגעה לטיול',
-      message: `האם אתם בטוחים שברצונכם להסיר את משפחת "${myFamily.name}" מרשימת המשתתפים בטיול?`,
+      message: `האם אתם בטוחים שברצונכם להסיר את משפחת "${capturedFamilyName}" מרשימת המשתתפים בטיול?`,
       confirmLabel: 'כן, בטלו הגעה',
       onConfirm: async () => {
-        setDeleting(true);
-        try {
-          await api(`trips/${tripId}/participants/${myFamily.id}`, 'DELETE');
-          localStorage.removeItem(`joinedTrip_${tripId}`);
-          setConfirmDelete(null);
-          await onRefreshBase();
-          await loadTrip();
-          showToast('הגעתכם לטיול בוטלה');
-        } finally {
-          setDeleting(false);
-        }
+        if (String(currentTripIdRef.current) !== String(capturedTripId)) return;
+        await api(`trips/${capturedTripId}/participants/${capturedFamilyId}`, 'DELETE');
+        localStorage.removeItem(`joinedTrip_${capturedTripId}`);
+        setConfirmDelete(null);
+        showToast('הגעתכם לטיול בוטלה');
+        await onRefreshBase();
+        await loadTrip(capturedTripId);
       },
     });
   };
@@ -320,20 +344,19 @@ export default function FamilyTripPage({
   };
 
   const requestRemoveRole = (role) => {
+    const capturedTripId = tripId;
+    const capturedRoleId = role.id;
     setConfirmDelete({
+      tripId: capturedTripId,
       title: 'הסרת אחריות מתפקיד',
       message: `האם אתם בטוחים שברצונכם להסיר את "${role.responsible}" מאחריות על "${role.title}"?`,
       confirmLabel: 'כן, הסירו אחריות',
       onConfirm: async () => {
-        setDeleting(true);
-        try {
-          await api('meals/' + role.id, 'PUT', { responsible: '', phone: '' });
-          setConfirmDelete(null);
-          await loadTrip();
-          showToast('האחריות הוסרה מהתפקיד');
-        } finally {
-          setDeleting(false);
-        }
+        if (String(currentTripIdRef.current) !== String(capturedTripId)) return;
+        await api('meals/' + capturedRoleId, 'PUT', { responsible: '', phone: '' });
+        setConfirmDelete(null);
+        showToast('האחריות הוסרה מהתפקיד');
+        await loadTrip(capturedTripId);
       },
     });
   };
@@ -359,21 +382,20 @@ export default function FamilyTripPage({
   };
 
   const requestDeleteRole = (role) => {
+    const capturedTripId = tripId;
+    const capturedRoleId = role.id;
     setConfirmDelete({
+      tripId: capturedTripId,
       title: 'מחיקת תפקיד',
       message: `האם אתם בטוחים שברצונכם למחוק את התפקיד "${role.title}" מהטיול?`,
       confirmLabel: 'כן, מחקו תפקיד',
       onConfirm: async () => {
-        setDeleting(true);
-        try {
-          await api('meals/' + role.id, 'DELETE');
-          setConfirmDelete(null);
-          setRoleModal(null);
-          await loadTrip();
-          showToast('התפקיד נמחק 🗑️');
-        } finally {
-          setDeleting(false);
-        }
+        if (String(currentTripIdRef.current) !== String(capturedTripId)) return;
+        await api('meals/' + capturedRoleId, 'DELETE');
+        setConfirmDelete(null);
+        setRoleModal(null);
+        showToast('התפקיד נמחק 🗑️');
+        await loadTrip(capturedTripId);
       },
     });
   };
@@ -398,39 +420,37 @@ export default function FamilyTripPage({
   };
 
   const requestUnclaimGear = (gearItem) => {
+    const capturedTripId = tripId;
+    const capturedGearId = gearItem.id;
     setConfirmDelete({
+      tripId: capturedTripId,
       title: 'הסרת אחריות מפריט',
       message: `האם אתם בטוחים שברצונכם להסיר את האחריות של "${gearItem.brought_by}" מהבאת "${gearItem.item}"?`,
       confirmLabel: 'כן, הסירו אחריות',
       onConfirm: async () => {
-        setDeleting(true);
-        try {
-          await api('gear/' + gearItem.id, 'PUT', { brought_by: '' });
-          setConfirmDelete(null);
-          await loadTrip();
-          showToast('האחריות הוסרה מהפריט');
-        } finally {
-          setDeleting(false);
-        }
+        if (String(currentTripIdRef.current) !== String(capturedTripId)) return;
+        await api('gear/' + capturedGearId, 'PUT', { brought_by: '' });
+        setConfirmDelete(null);
+        showToast('האחריות הוסרה מהפריט');
+        await loadTrip(capturedTripId);
       },
     });
   };
 
   const requestDeleteGear = (gearItem) => {
+    const capturedTripId = tripId;
+    const capturedGearId = gearItem.id;
     setConfirmDelete({
+      tripId: capturedTripId,
       title: 'מחיקת פריט מרשימת הציוד',
       message: `האם אתם בטוחים שברצונכם למחוק את "${gearItem.item}" מרשימת הכלים והמצרכים?`,
       confirmLabel: 'כן, מחקו פריט',
       onConfirm: async () => {
-        setDeleting(true);
-        try {
-          await api('gear/' + gearItem.id, 'DELETE');
-          setConfirmDelete(null);
-          await loadTrip();
-          showToast('הפריט נמחק 🗑️');
-        } finally {
-          setDeleting(false);
-        }
+        if (String(currentTripIdRef.current) !== String(capturedTripId)) return;
+        await api('gear/' + capturedGearId, 'DELETE');
+        setConfirmDelete(null);
+        showToast('הפריט נמחק 🗑️');
+        await loadTrip(capturedTripId);
       },
     });
   };
@@ -538,21 +558,20 @@ export default function FamilyTripPage({
   };
 
   const requestDeleteExpense = (expense) => {
+    const capturedTripId = tripId;
+    const capturedExpenseId = expense.id;
     setConfirmDelete({
+      tripId: capturedTripId,
       title: 'מחיקת הוצאה',
       message: `האם אתם בטוחים שברצונכם למחוק את ההוצאה "${expense.description}" (${formatMoney(expense.amount)})?`,
       confirmLabel: 'כן, מחקו הוצאה',
       onConfirm: async () => {
-        setDeleting(true);
-        try {
-          await api('expenses/' + expense.id, 'DELETE');
-          setConfirmDelete(null);
-          setExpenseModal(null);
-          await loadTrip();
-          showToast('ההוצאה נמחקה 🗑️');
-        } finally {
-          setDeleting(false);
-        }
+        if (String(currentTripIdRef.current) !== String(capturedTripId)) return;
+        await api('expenses/' + capturedExpenseId, 'DELETE');
+        setConfirmDelete(null);
+        setExpenseModal(null);
+        showToast('ההוצאה נמחקה 🗑️');
+        await loadTrip(capturedTripId);
       },
     });
   };
@@ -1399,7 +1418,7 @@ export default function FamilyTripPage({
       <ConfirmDeleteModal
         open={!!confirmDelete}
         onClose={() => !deleting && setConfirmDelete(null)}
-        onConfirm={confirmDelete?.onConfirm}
+        onConfirm={executeConfirmedDelete}
         title={confirmDelete?.title}
         message={confirmDelete?.message}
         confirmLabel={confirmDelete?.confirmLabel}

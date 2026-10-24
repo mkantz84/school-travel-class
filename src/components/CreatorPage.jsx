@@ -88,11 +88,12 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
       message: `האם אתם בטוחים שברצונכם למחוק את הטיול ״${trip.name}״? כל נתוני המשתתפים, התפקידים וההוצאות של הטיול יימחקו לצמיתות.`,
       onConfirm: async () => {
         await api('trips/' + trip.id, 'DELETE');
-        await onRefresh();
+        setConfirmDelete(null);
         showToast('הטיול נמחק');
         if (String(trip.id) === String(tripId)) {
           window.location.hash = '#/admin';
         }
+        await onRefresh();
       },
     });
   };
@@ -136,12 +137,13 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
   const requestDeleteFamily = (fam) => {
     setConfirmDelete({
       title: 'מחיקת משפחה',
-      message: `האם אתם בטוחים שברצונכם למחוק את המשפחה ״${fam.name}״ מהמערכת?`,
+      message: `האם אתם בטוחים שברצונכם למחוק את המשפחה ״${fam.name}״ מהמערכת? פעולה זו תסיר אותה גם מרשימות המשתתפים ותמחק את ההוצאות ששולמו על ידה בכל הטיולים (מה שישפיע על חישובי ההוצאות והחובות).`,
       onConfirm: async () => {
         await api('families/' + fam.id, 'DELETE');
+        setConfirmDelete(null);
         setFamilyModal(null);
-        await onRefresh();
         showToast('המשפחה נמחקה');
+        await onRefresh();
       },
     });
   };
@@ -151,7 +153,6 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
     setDeleting(true);
     try {
       await confirmDelete.onConfirm();
-      setConfirmDelete(null);
     } catch (err) {
       showToast(err.message);
     } finally {
