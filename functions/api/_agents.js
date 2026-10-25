@@ -210,6 +210,9 @@ export async function runImageAgent(env, trip) {
       const directorRes = await client.interactions.create({
         model: 'gemini-3.8-flash',
         input: styleDirectorPrompt,
+        generation_config: {
+          thinking_level: 'low',
+        },
         response_format: {
           type: 'text',
           mime_type: 'application/json',
@@ -412,6 +415,9 @@ export async function runMealsAgent(env, trip, existingMeals = [], headcount = 2
       const interaction = await client.interactions.create({
         model: 'gemini-3.8-flash',
         input: prompt,
+        generation_config: {
+          thinking_level: 'low',
+        },
         response_format: {
           type: 'text',
           mime_type: 'application/json',
@@ -761,6 +767,9 @@ export async function runGearAgent(env, trip, mealsList = [], existingGear = [],
       const interaction = await client.interactions.create({
         model: 'gemini-3.8-flash',
         input: prompt,
+        generation_config: {
+          thinking_level: 'low',
+        },
         response_format: {
           type: 'text',
           mime_type: 'application/json',

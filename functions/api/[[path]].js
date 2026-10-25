@@ -122,6 +122,13 @@ async function ensureSchema(db) {
     created_at TEXT DEFAULT (datetime('now'))
   )`).run();
 
+  await db.prepare(`CREATE TABLE IF NOT EXISTS trip_image_chunks (
+    trip_id INTEGER NOT NULL,
+    chunk_idx INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (trip_id, chunk_idx)
+  )`).run();
+
   await db.prepare(`CREATE TABLE IF NOT EXISTS _app_migrations (
     name TEXT PRIMARY KEY,
     applied_at TEXT DEFAULT (datetime('now'))
@@ -141,6 +148,24 @@ async function ensureSchema(db) {
   }
 
   schemaInitialized = true;
+}
+
+async function saveTripImageData(db, tripId, imageUrl, imageStyle, imageData) {
+  await db.prepare('DELETE FROM trip_image_chunks WHERE trip_id = ?').bind(tripId).run();
+  if (imageData && imageData.length > 0) {
+    const CHUNK_SIZE = 400000;
+    for (let i = 0, idx = 0; i < imageData.length; i += CHUNK_SIZE, idx++) {
+      const part = imageData.slice(i, i + CHUNK_SIZE);
+      await db
+        .prepare('INSERT INTO trip_image_chunks (trip_id, chunk_idx, data) VALUES (?, ?, ?)')
+        .bind(tripId, idx, part)
+        .run();
+    }
+  }
+  await db
+    .prepare('UPDATE trips SET image_url = ?, image_style = ?, image_data = ? WHERE id = ?')
+    .bind(imageUrl || '', imageStyle || '', '', tripId)
+    .run();
 }
 
 async function getTripFull(db, id) {
@@ -165,7 +190,7 @@ function calculateEffectiveHeadcount(trip, participants) {
   return Math.max(registeredPeople, expected, 16);
 }
 
-async function executeInitialAgents(env, db, tripId) {
+async function executeInitialAgents(env, db, tripId, options = {}) {
   const runId = `init_${tripId}_${Date.now()}`;
   const trip = await first(db, `SELECT ${TRIP_PUBLIC_COLS} FROM trips WHERE id = ?`, tripId);
   if (!trip) return;
@@ -177,6 +202,13 @@ async function executeInitialAgents(env, db, tripId) {
   await update(db, 'trips', tripId, { ai_status: 'running' });
 
   try {
+    if (options?.replace_ai) {
+      await db.batch([
+        db.prepare("DELETE FROM meals WHERE trip_id = ? AND source = 'ai' AND (responsible IS NULL OR responsible = '')").bind(tripId),
+        db.prepare("DELETE FROM gear WHERE trip_id = ? AND source = 'ai' AND (brought_by IS NULL OR brought_by = '')").bind(tripId),
+      ]);
+    }
+
     const participants = await all(db, 'SELECT * FROM participants WHERE trip_id = ?', tripId);
     const existingMeals = await all(db, 'SELECT * FROM meals WHERE trip_id = ?', tripId);
     const existingGear = await all(db, 'SELECT * FROM gear WHERE trip_id = ?', tripId);
@@ -196,23 +228,9 @@ async function executeInitialAgents(env, db, tripId) {
       })(),
     ]);
 
-    const batchStmts = [];
-
-    if (imageResult?.image_url) {
-      batchStmts.push(
-        db
-          .prepare('UPDATE trips SET image_url = ?, image_style = ?, image_data = ?, ai_status = ? WHERE id = ?')
-          .bind(
-            imageResult.image_url,
-            imageResult.image_style || '',
-            imageResult.image_data || '',
-            'done',
-            tripId
-          )
-      );
-    } else {
-      batchStmts.push(db.prepare('UPDATE trips SET ai_status = ? WHERE id = ?').bind('done', tripId));
-    }
+    const batchStmts = [
+      db.prepare('UPDATE trips SET ai_status = ? WHERE id = ?').bind('done', tripId),
+    ];
 
     const { suggestedMeals, suggestedGear } = mealsAndGearResult;
     suggestedMeals.forEach((m, idx) => {
@@ -246,12 +264,28 @@ async function executeInitialAgents(env, db, tripId) {
     );
 
     await db.batch(batchStmts);
+
+    if (imageResult?.image_url) {
+      try {
+        await saveTripImageData(
+          db,
+          tripId,
+          imageResult.image_url,
+          imageResult.image_style || '',
+          imageResult.image_data || ''
+        );
+      } catch (imgStoreErr) {
+        console.warn('Warning: failed to store chunked image data in D1:', imgStoreErr);
+      }
+    }
+
     return {
       ok: true,
       run_id: runId,
       meals_added: suggestedMeals.length,
       gear_added: suggestedGear.length,
       image_style: imageResult?.image_style || '',
+      has_gemini_key: Boolean(env?.GEMINI_API_KEY),
     };
   } catch (err) {
     await update(db, 'trips', tripId, { ai_status: 'failed' });
@@ -365,7 +399,7 @@ async function route(request, env, parts, ctx) {
       return json({ id: tripId });
     }
 
-    // Serve generated trip image from R2 or D1 image_data
+    // Serve generated trip image from R2, D1 trip_image_chunks, or legacy trips.image_data
     if (method === 'GET' && id && sub === 'image') {
       if (env.TRIP_IMAGES && typeof env.TRIP_IMAGES.get === 'function') {
         const obj = await env.TRIP_IMAGES.get(`trip-${id}`);
@@ -378,9 +412,18 @@ async function route(request, env, parts, ctx) {
           });
         }
       }
-      const row = await first(db, 'SELECT image_data FROM trips WHERE id = ?', id);
-      if (row?.image_data && row.image_data.startsWith('data:')) {
-        const match = row.image_data.match(/^data:([^;]+);base64,(.+)$/);
+      const chunks = await all(
+        db,
+        'SELECT data FROM trip_image_chunks WHERE trip_id = ? ORDER BY chunk_idx ASC',
+        id
+      );
+      let dataUri = chunks.length > 0 ? chunks.map((c) => c.data).join('') : '';
+      if (!dataUri) {
+        const row = await first(db, 'SELECT image_data FROM trips WHERE id = ?', id);
+        dataUri = row?.image_data || '';
+      }
+      if (dataUri && dataUri.startsWith('data:')) {
+        const match = dataUri.match(/^data:([^;]+);base64,(.+)$/);
         if (match) {
           const mimeType = match[1];
           const b64 = match[2];
@@ -399,7 +442,7 @@ async function route(request, env, parts, ctx) {
     // AI Agents endpoints under /api/trips/:id/agents/:action
     if (id && sub === 'agents') {
       if (method === 'POST' && subId === 'initial') {
-        const resData = await executeInitialAgents(env, db, id);
+        const resData = await executeInitialAgents(env, db, id, body || {});
         return json(resData);
       }
 
@@ -598,7 +641,7 @@ async function route(request, env, parts, ctx) {
     }
     if (method === 'DELETE' && id && !sub) {
       await db.batch(
-        ['participants', 'meals', 'gear', 'checklist', 'expenses', 'agent_runs', 'agent_suggestions']
+        ['participants', 'meals', 'gear', 'checklist', 'expenses', 'agent_runs', 'agent_suggestions', 'trip_image_chunks']
           .map((t) => db.prepare(`DELETE FROM ${t} WHERE trip_id = ?`).bind(id))
           .concat(db.prepare('DELETE FROM trips WHERE id = ?').bind(id))
       );
