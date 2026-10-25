@@ -1,5 +1,3 @@
-import { GoogleGenAI } from '@google/genai';
-
 export const IMAGE_STYLES = {
   watercolor_storybook: {
     id: 'watercolor_storybook',
@@ -74,7 +72,49 @@ export function detectTripTheme(trip) {
 function getGenAIClient(env) {
   const apiKey = env?.GEMINI_API_KEY;
   if (!apiKey) return null;
-  return new GoogleGenAI({ apiKey });
+
+  return {
+    interactions: {
+      async create(body) {
+        const res = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            'x-goog-api-key': apiKey,
+          },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          throw new Error(`Gemini Interactions API error (${res.status}): ${errText}`);
+        }
+        const interaction = await res.json();
+        const steps = Array.isArray(interaction.steps) ? interaction.steps : [];
+
+        // Extract output_text and output_images from model_output steps (matching @google/genai SDK)
+        const textParts = [];
+        const outputImages = [];
+        for (const step of steps) {
+          if (step.type === 'model_output' && Array.isArray(step.content)) {
+            for (const item of step.content) {
+              if (item.type === 'text' && item.text) {
+                textParts.push(item.text);
+              } else if (item.type === 'image' && item.data) {
+                outputImages.push(item);
+              }
+            }
+          }
+        }
+        return {
+          ...interaction,
+          output_text: textParts.join(''),
+          output_image: outputImages[0] || undefined,
+          output_images: outputImages,
+        };
+      },
+    },
+  };
 }
 
 function generateStylizedSvgDataUrl(trip, styleObj, theme) {
