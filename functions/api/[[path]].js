@@ -1,7 +1,12 @@
 // Cloudflare Pages Function – handles every request under /api/*
 // Storage: D1 (binding "DB"), optional R2 (binding "TRIP_IMAGES"), Gemini API ("GEMINI_API_KEY")
 
-import { runImageAgent, runMealsAgent, runGearAgent } from './_agents.js';
+import { serveTripImage } from './_agents/imageAgent.js';
+import {
+  executeInitialAgents,
+  executeRecalculateAgents,
+  approveAgentSuggestions,
+} from './_agents/orchestrator.js';
 
 const FAMILY_FIELDS = ['name', 'parents', 'kids_names', 'phone', 'adults', 'kids', 'notes'];
 const TRIP_FIELDS = [
@@ -150,24 +155,6 @@ async function ensureSchema(db) {
   schemaInitialized = true;
 }
 
-async function saveTripImageData(db, tripId, imageUrl, imageStyle, imageData) {
-  await db.prepare('DELETE FROM trip_image_chunks WHERE trip_id = ?').bind(tripId).run();
-  if (imageData && imageData.length > 0) {
-    const CHUNK_SIZE = 400000;
-    for (let i = 0, idx = 0; i < imageData.length; i += CHUNK_SIZE, idx++) {
-      const part = imageData.slice(i, i + CHUNK_SIZE);
-      await db
-        .prepare('INSERT INTO trip_image_chunks (trip_id, chunk_idx, data) VALUES (?, ?, ?)')
-        .bind(tripId, idx, part)
-        .run();
-    }
-  }
-  await db
-    .prepare('UPDATE trips SET image_url = ?, image_style = ?, image_data = ? WHERE id = ?')
-    .bind(imageUrl || '', imageStyle || '', '', tripId)
-    .run();
-}
-
 async function getTripFull(db, id) {
   await ensureSchema(db);
   const trip = await first(db, `SELECT ${TRIP_PUBLIC_COLS} FROM trips WHERE id = ?`, id);
@@ -181,122 +168,6 @@ async function getTripFull(db, id) {
   return { trip, participants, meals, gear, expenses };
 }
 
-function calculateEffectiveHeadcount(trip, participants) {
-  const registeredPeople = (participants || []).reduce(
-    (sum, p) => sum + (Number(p.adults) || 0) + (Number(p.kids) || 0),
-    0
-  );
-  const expected = Number(trip.expected_people) || 0;
-  return Math.max(registeredPeople, expected, 16);
-}
-
-async function executeInitialAgents(env, db, tripId, options = {}) {
-  const runId = `init_${tripId}_${Date.now()}`;
-  const trip = await first(db, `SELECT ${TRIP_PUBLIC_COLS} FROM trips WHERE id = ?`, tripId);
-  if (!trip) return;
-
-  await db
-    .prepare('INSERT INTO agent_runs (id, trip_id, mode, status) VALUES (?, ?, ?, ?)')
-    .bind(runId, tripId, 'initial', 'running')
-    .run();
-  await update(db, 'trips', tripId, { ai_status: 'running' });
-
-  try {
-    if (options?.replace_ai) {
-      await db.batch([
-        db.prepare("DELETE FROM meals WHERE trip_id = ? AND source = 'ai' AND (responsible IS NULL OR responsible = '')").bind(tripId),
-        db.prepare("DELETE FROM gear WHERE trip_id = ? AND source = 'ai' AND (brought_by IS NULL OR brought_by = '')").bind(tripId),
-      ]);
-    }
-
-    const participants = await all(db, 'SELECT * FROM participants WHERE trip_id = ?', tripId);
-    const existingMeals = await all(db, 'SELECT * FROM meals WHERE trip_id = ?', tripId);
-    const existingGear = await all(db, 'SELECT * FROM gear WHERE trip_id = ?', tripId);
-    const headcount = calculateEffectiveHeadcount(trip, participants);
-
-    // Run Agent 1 (Image) in parallel with Agent 2 (Meals/Roles) -> Agent 3 (Gear/Supplies)
-    const [imageResult, mealsAndGearResult] = await Promise.all([
-      runImageAgent(env, trip),
-      (async () => {
-        const suggestedMeals = await runMealsAgent(env, trip, existingMeals, headcount);
-        const combinedMeals = [
-          ...existingMeals,
-          ...suggestedMeals.map((m) => ({ title: m.title, menu: m.menu, ai_key: m.ai_key })),
-        ];
-        const suggestedGear = await runGearAgent(env, trip, combinedMeals, existingGear, headcount);
-        return { suggestedMeals, suggestedGear };
-      })(),
-    ]);
-
-    const batchStmts = [
-      db.prepare('UPDATE trips SET ai_status = ? WHERE id = ?').bind('done', tripId),
-    ];
-
-    const { suggestedMeals, suggestedGear } = mealsAndGearResult;
-    suggestedMeals.forEach((m, idx) => {
-      batchStmts.push(
-        db
-          .prepare(
-            'INSERT INTO meals (trip_id, title, responsible, menu, sort, source, ai_key) VALUES (?, ?, ?, ?, ?, ?, ?)'
-          )
-          .bind(tripId, m.title, '', m.menu || '', idx + 1, 'ai', m.ai_key || '')
-      );
-    });
-
-    suggestedGear.forEach((g) => {
-      batchStmts.push(
-        db
-          .prepare(
-            'INSERT INTO gear (trip_id, item, needed_for, brought_by, source, ai_key, quantity) VALUES (?, ?, ?, ?, ?, ?, ?)'
-          )
-          .bind(tripId, g.item, g.needed_for || 'כללי', '', 'ai', g.ai_key || '', g.quantity || '')
-      );
-    });
-
-    batchStmts.push(
-      db
-        .prepare('UPDATE agent_runs SET status = ?, summary = ? WHERE id = ?')
-        .bind(
-          'done',
-          `נוצרו ${suggestedMeals.length} תפקידים ו-${suggestedGear.length} פריטי ציוד ומצרכים`,
-          runId
-        )
-    );
-
-    await db.batch(batchStmts);
-
-    if (imageResult?.image_url) {
-      try {
-        await saveTripImageData(
-          db,
-          tripId,
-          imageResult.image_url,
-          imageResult.image_style || '',
-          imageResult.image_data || ''
-        );
-      } catch (imgStoreErr) {
-        console.warn('Warning: failed to store chunked image data in D1:', imgStoreErr);
-      }
-    }
-
-    return {
-      ok: true,
-      run_id: runId,
-      meals_added: suggestedMeals.length,
-      gear_added: suggestedGear.length,
-      image_style: imageResult?.image_style || '',
-      has_gemini_key: Boolean(env?.GEMINI_API_KEY),
-    };
-  } catch (err) {
-    await update(db, 'trips', tripId, { ai_status: 'failed' });
-    await db
-      .prepare('UPDATE agent_runs SET status = ?, error = ? WHERE id = ?')
-      .bind('failed', err?.message || 'שגיאה בהרצת סוכני ה-AI', runId)
-      .run();
-    throw err;
-  }
-}
-
 function normalizeFamilyName(raw) {
   return String(raw || '')
     .trim()
@@ -304,6 +175,14 @@ function normalizeFamilyName(raw) {
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
+}
+
+function assertAdminFamily(trip, requestingFamilyId, actionMessage) {
+  const reqId = Number(requestingFamilyId) || 0;
+  const adminFamilyId = Number(trip.focalizer_family_id) || 0;
+  if (!adminFamilyId || reqId !== adminFamilyId) {
+    throw new HttpError(403, actionMessage);
+  }
 }
 
 async function route(request, env, parts, ctx) {
@@ -388,12 +267,14 @@ async function route(request, env, parts, ctx) {
       }
       data.ai_status = 'running';
       const tripId = await insert(db, 'trips', data);
+      const createdTrip = await first(db, `SELECT ${TRIP_PUBLIC_COLS} FROM trips WHERE id = ?`, tripId);
 
-      // Run the 3 parallel AI agents right away during creation (or via waitUntil if supported)
-      try {
-        await executeInitialAgents(env, db, tripId);
-      } catch (err) {
-        console.warn('Initial agents error during trip creation:', err);
+      if (createdTrip) {
+        try {
+          await executeInitialAgents(env, db, createdTrip);
+        } catch (err) {
+          console.warn('Initial agents error during trip creation:', err);
+        }
       }
 
       return json({ id: tripId });
@@ -401,229 +282,36 @@ async function route(request, env, parts, ctx) {
 
     // Serve generated trip image from R2, D1 trip_image_chunks, or legacy trips.image_data
     if (method === 'GET' && id && sub === 'image') {
-      if (env.TRIP_IMAGES && typeof env.TRIP_IMAGES.get === 'function') {
-        const obj = await env.TRIP_IMAGES.get(`trip-${id}`);
-        if (obj) {
-          return new Response(obj.body, {
-            headers: {
-              'content-type': obj.httpMetadata?.contentType || 'image/png',
-              'cache-control': 'public, max-age=86400',
-            },
-          });
-        }
-      }
-      const chunks = await all(
-        db,
-        'SELECT data FROM trip_image_chunks WHERE trip_id = ? ORDER BY chunk_idx ASC',
-        id
-      );
-      let dataUri = chunks.length > 0 ? chunks.map((c) => c.data).join('') : '';
-      if (!dataUri) {
-        const row = await first(db, 'SELECT image_data FROM trips WHERE id = ?', id);
-        dataUri = row?.image_data || '';
-      }
-      if (dataUri && dataUri.startsWith('data:')) {
-        const match = dataUri.match(/^data:([^;]+);base64,(.+)$/);
-        if (match) {
-          const mimeType = match[1];
-          const b64 = match[2];
-          const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-          return new Response(bytes, {
-            headers: {
-              'content-type': mimeType,
-              'cache-control': 'public, max-age=86400',
-            },
-          });
-        }
-      }
+      const imgResponse = await serveTripImage(env, db, id);
+      if (imgResponse) return imgResponse;
       throw new HttpError(404, 'Image not found');
     }
 
     // AI Agents endpoints under /api/trips/:id/agents/:action
     if (id && sub === 'agents') {
+      const trip = await first(db, `SELECT ${TRIP_PUBLIC_COLS} FROM trips WHERE id = ?`, id);
+      if (!trip) throw new HttpError(404, 'הטיול לא נמצא');
+
       if (method === 'POST' && subId === 'initial') {
-        const resData = await executeInitialAgents(env, db, id, body || {});
-        return json(resData);
+        return json(await executeInitialAgents(env, db, trip, body || {}));
       }
 
-      // Recalculate roles & gear (Admin Family only, does NOT regenerate trip image)
       if (method === 'POST' && subId === 'recalculate') {
-        const trip = await first(db, `SELECT ${TRIP_PUBLIC_COLS} FROM trips WHERE id = ?`, id);
-        if (!trip) throw new HttpError(404, 'הטיול לא נמצא');
-
-        const requestingFamilyId = Number(body?.family_id) || 0;
-        const adminFamilyId = Number(trip.focalizer_family_id) || 0;
-        if (!adminFamilyId || requestingFamilyId !== adminFamilyId) {
-          throw new HttpError(403, 'רק המשפחה המנהלת של הטיול מורשית להריץ חישוב מחדש של סוכני ה-AI');
-        }
-
-        const runId = `recalc_${id}_${Date.now()}`;
-        await db
-          .prepare('INSERT INTO agent_runs (id, trip_id, mode, status) VALUES (?, ?, ?, ?)')
-          .bind(runId, id, 'recalculate', 'running')
-          .run();
-
-        try {
-          const [participants, existingMeals, existingGear] = await Promise.all([
-            all(db, 'SELECT * FROM participants WHERE trip_id = ?', id),
-            all(db, 'SELECT * FROM meals WHERE trip_id = ? ORDER BY sort, id', id),
-            all(db, 'SELECT * FROM gear WHERE trip_id = ? ORDER BY id', id),
-          ]);
-
-          const headcount = calculateEffectiveHeadcount(trip, participants);
-
-          // Agent 2 (Meals/Roles) -> Agent 3 (Gear/Supplies scaled by headcount)
-          const suggestedMeals = await runMealsAgent(env, trip, existingMeals, headcount);
-          const allMealsForGear = [
-            ...existingMeals,
-            ...suggestedMeals.map((m) => ({ title: m.title, menu: m.menu, ai_key: m.ai_key })),
-          ];
-          const suggestedGear = await runGearAgent(env, trip, allMealsForGear, existingGear, headcount);
-
-          const stmts = [];
-          for (const m of suggestedMeals) {
-            stmts.push(
-              db
-                .prepare(
-                  `INSERT INTO agent_suggestions (run_id, trip_id, kind, title, subtitle, needed_for, ai_key, reason, payload, status)
-                   VALUES (?, ?, 'meal', ?, ?, '', ?, ?, ?, 'pending')`
-                )
-                .bind(
-                  runId,
-                  id,
-                  m.title,
-                  m.menu || '',
-                  m.ai_key || '',
-                  m.reason || `מותאם לימי הטיול ול-${headcount} משתתפים`,
-                  JSON.stringify(m)
-                )
-            );
-          }
-
-          for (const g of suggestedGear) {
-            stmts.push(
-              db
-                .prepare(
-                  `INSERT INTO agent_suggestions (run_id, trip_id, kind, title, subtitle, needed_for, ai_key, reason, payload, status)
-                   VALUES (?, ?, 'gear', ?, ?, ?, ?, ?, ?, 'pending')`
-                )
-                .bind(
-                  runId,
-                  id,
-                  g.item,
-                  g.quantity || '',
-                  g.needed_for || 'כללי',
-                  g.ai_key || '',
-                  g.reason || `מותאם ל-${headcount} משתתפים`,
-                  JSON.stringify(g)
-                )
-            );
-          }
-
-          stmts.push(
-            db
-              .prepare('UPDATE agent_runs SET status = ?, summary = ? WHERE id = ?')
-              .bind(
-                'done',
-                `נמצאו ${suggestedMeals.length} תפקידים ו-${suggestedGear.length} פריטי ציוד/מצרכים להשלמה`,
-                runId
-              )
-          );
-
-          if (stmts.length > 0) {
-            await db.batch(stmts);
-          }
-
-          const rawSuggestions = await all(
-            db,
-            'SELECT * FROM agent_suggestions WHERE run_id = ? ORDER BY id',
-            runId
-          );
-          const savedSuggestions = rawSuggestions.map((s) => {
-            let parsedPayload = {};
-            try {
-              parsedPayload = typeof s.payload === 'string' ? JSON.parse(s.payload) : s.payload || {};
-            } catch (_) {
-              parsedPayload = {};
-            }
-            return { ...s, payload: parsedPayload };
-          });
-
-          return json({
-            run_id: runId,
-            headcount,
-            registered_families: participants.length,
-            suggestions: savedSuggestions,
-          });
-        } catch (err) {
-          await db
-            .prepare('UPDATE agent_runs SET status = ?, error = ? WHERE id = ?')
-            .bind('failed', err?.message || 'שגיאה בחישוב מחדש', runId)
-            .run();
-          throw err;
-        }
+        assertAdminFamily(
+          trip,
+          body?.family_id,
+          'רק המשפחה המנהלת של הטיול מורשית להריץ חישוב מחדש של סוכני ה-AI'
+        );
+        return json(await executeRecalculateAgents(env, db, trip));
       }
 
-      // Approve selected suggestions from the recalculation modal
       if (method === 'POST' && subId === 'approve') {
-        const trip = await first(db, `SELECT ${TRIP_PUBLIC_COLS} FROM trips WHERE id = ?`, id);
-        if (!trip) throw new HttpError(404, 'הטיול לא נמצא');
-
-        const requestingFamilyId = Number(body?.family_id) || 0;
-        const adminFamilyId = Number(trip.focalizer_family_id) || 0;
-        if (!adminFamilyId || requestingFamilyId !== adminFamilyId) {
-          throw new HttpError(403, 'רק המשפחה המנהלת של הטיול מורשית לאשר הצעות AI');
-        }
-
-        const suggestionIds = Array.isArray(body?.suggestion_ids)
-          ? body.suggestion_ids.map(Number).filter(Boolean)
-          : [];
-        if (suggestionIds.length === 0) {
-          return json({ ok: true, added_meals: 0, added_gear: 0 });
-        }
-
-        const placeholders = suggestionIds.map(() => '?').join(',');
-        const rows = await all(
-          db,
-          `SELECT * FROM agent_suggestions WHERE trip_id = ? AND status = 'pending' AND id IN (${placeholders})`,
-          id,
-          ...suggestionIds
+        assertAdminFamily(
+          trip,
+          body?.family_id,
+          'רק המשפחה המנהלת של הטיול מורשית לאשר הצעות AI'
         );
-
-        const batchStmts = [];
-        let addedMeals = 0;
-        let addedGear = 0;
-
-        for (const s of rows) {
-          if (s.kind === 'meal') {
-            addedMeals++;
-            batchStmts.push(
-              db
-                .prepare(
-                  'INSERT INTO meals (trip_id, title, responsible, menu, sort, source, ai_key) VALUES (?, ?, ?, ?, ?, ?, ?)'
-                )
-                .bind(id, s.title, '', s.subtitle || '', 50 + addedMeals, 'ai', s.ai_key || '')
-            );
-          } else if (s.kind === 'gear') {
-            addedGear++;
-            batchStmts.push(
-              db
-                .prepare(
-                  'INSERT INTO gear (trip_id, item, needed_for, brought_by, source, ai_key, quantity) VALUES (?, ?, ?, ?, ?, ?, ?)'
-                )
-                .bind(id, s.title, s.needed_for || 'כללי', '', 'ai', s.ai_key || '', s.subtitle || '')
-            );
-          }
-          batchStmts.push(
-            db.prepare(`UPDATE agent_suggestions SET status = 'approved' WHERE id = ?`).bind(s.id)
-          );
-        }
-
-        if (batchStmts.length > 0) {
-          await db.batch(batchStmts);
-        }
-
-        return json({ ok: true, added_meals: addedMeals, added_gear: addedGear });
+        return json(await approveAgentSuggestions(db, id, body?.suggestion_ids));
       }
     }
 
