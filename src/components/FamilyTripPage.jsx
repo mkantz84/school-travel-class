@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Tent, Calendar, MapPin, Compass, Users, Utensils, Wrench, Wallet,
-  Plus, Minus, Check, Trash2, Edit3, Share2, AlertCircle, UserPlus, LogOut, Backpack
+  Plus, Minus, Check, Trash2, Edit3, Share2, AlertCircle, UserPlus, LogOut, Backpack, Sparkles, Crown, Lock
 } from 'lucide-react';
 import { api, formatMoney, getTripImage, findDuplicateFamily } from '../api';
 import { formatHebrewRange } from './DateRangePicker';
 import CustomSelect from './CustomSelect';
 import Modal, { ConfirmDeleteModal } from './Modal';
+import AiSuggestionsModal from './AiSuggestionsModal';
 
 function parseSplitIds(raw, defaultIds) {
   if (!raw) return defaultIds;
@@ -49,6 +50,12 @@ export default function FamilyTripPage({
   const [confirmDelete, setConfirmDelete] = useState(null); // { tripId, title, message, confirmLabel, onConfirm }
   const [deleting, setDeleting] = useState(false);
 
+  // AI Agent Recalculation & Approval Modal state
+  const [recalculating, setRecalculating] = useState(false);
+  const [suggestionsModal, setSuggestionsModal] = useState(null); // { run_id, headcount, registered_families, suggestions: [] }
+  const [selectedSuggestionIds, setSelectedSuggestionIds] = useState([]);
+  const [approvingSuggestions, setApprovingSuggestions] = useState(false);
+
   const loadTrip = async (targetTripId = tripId) => {
     const d = await api('trips/' + targetTripId);
     if (String(currentTripIdRef.current) !== String(targetTripId)) return;
@@ -63,6 +70,10 @@ export default function FamilyTripPage({
     setRoleModal(null);
     setGearModal(false);
     setExpenseModal(null);
+    setRecalculating(false);
+    setSuggestionsModal(null);
+    setSelectedSuggestionIds([]);
+    setApprovingSuggestions(false);
     setLoading(true);
     loadTrip(tripId);
   }, [tripId]);
@@ -334,8 +345,64 @@ export default function FamilyTripPage({
   // STEP 2: Streamlined Single-Page Trip Dashboard
   // ====================================================================
   const totalPeople = participants.reduce((s, p) => s + p.adults + p.kids, 0);
+  const effectiveHeadcount = Math.max(Number(trip.expected_people) || 0, totalPeople, 16);
+  const adminFamily = families.find((f) => Number(f.id) === Number(trip.focalizer_family_id)) || null;
+  const isTripAdmin = !!myFamily && Number(trip.focalizer_family_id) === Number(myFamily.id);
   const myGearItems = gear.filter((g) => g.brought_by === myFamily.name);
   const myAssignedRoles = meals.filter((m) => m.responsible === myFamily.name);
+
+  // AI Agent Recalculation & Approval handlers
+  const handleTriggerAgentRecalculate = async () => {
+    if (!isTripAdmin || recalculating) return;
+    const capturedTripId = tripId;
+    setRecalculating(true);
+    try {
+      const res = await api(`trips/${capturedTripId}/agents/recalculate`, 'POST', {
+        family_id: myFamily.id,
+      });
+      if (String(currentTripIdRef.current) !== String(capturedTripId)) return;
+      const list = res.suggestions || [];
+      setSuggestionsModal({
+        run_id: res.run_id,
+        headcount: res.headcount || effectiveHeadcount,
+        registered_families: res.registered_families ?? participants.length,
+        suggestions: list,
+      });
+      setSelectedSuggestionIds(list.map((s) => s.id));
+    } catch (err) {
+      showToast(err.message);
+    } finally {
+      setRecalculating(false);
+    }
+  };
+
+  const toggleSuggestionSelection = (id) => {
+    setSelectedSuggestionIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const handleApproveSuggestions = async () => {
+    if (!suggestionsModal || selectedSuggestionIds.length === 0 || approvingSuggestions) return;
+    const capturedTripId = tripId;
+    setApprovingSuggestions(true);
+    try {
+      const res = await api(`trips/${capturedTripId}/agents/approve`, 'POST', {
+        family_id: myFamily.id,
+        suggestion_ids: selectedSuggestionIds,
+      });
+      if (String(currentTripIdRef.current) !== String(capturedTripId)) return;
+      setSuggestionsModal(null);
+      setSelectedSuggestionIds([]);
+      await loadTrip(capturedTripId);
+      const addedCount = (res.added_meals || 0) + (res.added_gear || 0);
+      showToast(`נוספו ${addedCount} תפקידים ופריטים חדשים לטיול! ✨`);
+    } catch (err) {
+      showToast(err.message);
+    } finally {
+      setApprovingSuggestions(false);
+    }
+  };
 
   // Roles handlers
   const handleTakeRole = async (roleId) => {
@@ -642,6 +709,18 @@ export default function FamilyTripPage({
                   <Users className="w-3.5 h-3.5" />
                   {participants.length} משפחות · {totalPeople} משתתפים
                 </span>
+                {adminFamily && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-400/90 text-slate-900 text-xs font-bold">
+                    <Crown className="w-3.5 h-3.5" />
+                    משפחה מנהלת: {adminFamily.name}
+                  </span>
+                )}
+                {trip.image_style && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/20 backdrop-blur-xs text-white text-[11px] font-medium">
+                    <Sparkles className="w-3 h-3" />
+                    איור AI
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -684,6 +763,7 @@ export default function FamilyTripPage({
                 const f = families.find((x) => x.id === p.family_id);
                 if (!f) return null;
                 const isMe = f.id === myFamily.id;
+                const isFamAdmin = adminFamily && f.id === adminFamily.id;
                 return (
                   <span
                     key={f.id}
@@ -693,6 +773,7 @@ export default function FamilyTripPage({
                         : 'bg-white border border-slate-200 text-slate-700'
                     }`}
                   >
+                    {isFamAdmin && <Crown className="w-3 h-3 text-amber-400" />}
                     {f.name} ({p.adults + p.kids})
                     {f.notes ? ` · 🥗 ${f.notes}` : ''}
                   </span>
@@ -706,6 +787,59 @@ export default function FamilyTripPage({
             >
               <LogOut className="w-3.5 h-3.5" />
               ביטול הגעה
+            </button>
+          </div>
+
+          {/* AI Agent Recalculation Bar (Enabled only for Admin Family) */}
+          <div className="pt-3 border-t border-slate-200/60 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <span>סוכני AI להשלמת תפקידים, כלים וכמויות מצרכים</span>
+                  <span className="px-2 py-0.5 rounded-full bg-forest-50 text-forest-700 text-[10px] font-semibold">
+                    מותאם ל-{effectiveHeadcount} משתתפים
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  {isTripAdmin
+                    ? 'בתור המשפחה המנהלת של הטיול, תוכלו להפעיל את הסוכנים כדי לחשב השלמות של תפקידים ומצרכים לפי מספר הנרשמים ולאשר מה להוסיף.'
+                    : adminFamily
+                    ? `רק המשפחה המנהלת של הטיול (${adminFamily.name}) יכולה להפעיל חישוב מחדש של תפקידים ומצרכים.`
+                    : 'טרם נבחרה משפחה מנהלת לטיול. ניתן לבחור משפחה מנהלת בדף ניהול הטיולים.'}
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              disabled={!isTripAdmin || recalculating}
+              onClick={handleTriggerAgentRecalculate}
+              title={
+                isTripAdmin
+                  ? 'הפעלת סוכני ה-AI לחישוב הצעות להשלמת תפקידים, כלים ומצרכים'
+                  : adminFamily
+                  ? `רק משפחת ${adminFamily.name} (מנהלי הטיול) יכולה להפעיל כפתור זה`
+                  : 'יש להגדיר משפחה מנהלת לטיול בדף הניהול'
+              }
+              className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition shadow-2xs ${
+                isTripAdmin
+                  ? 'bg-gradient-to-l from-forest-600 to-forest-500 hover:from-forest-700 hover:to-forest-600 text-white cursor-pointer'
+                  : 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'
+              }`}
+            >
+              {isTripAdmin ? (
+                <Sparkles className={`w-4 h-4 ${recalculating ? 'animate-spin' : ''}`} />
+              ) : (
+                <Lock className="w-3.5 h-3.5" />
+              )}
+              <span>
+                {recalculating
+                  ? 'סוכני ה-AI מחשבים הצעות...'
+                  : '✨ חישוב והשלמת ציוד ותפקידים (AI)'}
+              </span>
             </button>
           </div>
         </div>
@@ -855,7 +989,15 @@ export default function FamilyTripPage({
               >
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
-                    <h3 className="font-bold text-slate-800">{m.title}</h3>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <h3 className="font-bold text-slate-800">{m.title}</h3>
+                      {m.source === 'ai' && (
+                        <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200/70 text-[10px] font-semibold">
+                          <Sparkles className="w-2.5 h-2.5" />
+                          AI
+                        </span>
+                      )}
+                    </div>
                     <button
                       type="button"
                       onClick={() => setRoleModal(m)}
@@ -938,11 +1080,17 @@ export default function FamilyTripPage({
                     missing ? 'bg-coral-50/40 border-coral-500/40' : 'bg-white border-slate-200/80'
                   }`}
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-semibold text-sm text-slate-800">{g.item}</span>
                     {g.needed_for && (
                       <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs">
                         {g.needed_for}
+                      </span>
+                    )}
+                    {g.source === 'ai' && (
+                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200/70 text-[10px] font-semibold">
+                        <Sparkles className="w-2.5 h-2.5" />
+                        AI
                       </span>
                     )}
                   </div>
@@ -1413,6 +1561,17 @@ export default function FamilyTripPage({
           </form>
         )}
       </Modal>
+
+      {/* AI Suggestions Approval Modal */}
+      <AiSuggestionsModal
+        suggestionsModal={suggestionsModal}
+        selectedSuggestionIds={selectedSuggestionIds}
+        setSelectedSuggestionIds={setSelectedSuggestionIds}
+        toggleSuggestionSelection={toggleSuggestionSelection}
+        approvingSuggestions={approvingSuggestions}
+        onApprove={handleApproveSuggestions}
+        onClose={() => setSuggestionsModal(null)}
+      />
 
       {/* Delete / Remove Confirmation Modal */}
       <ConfirmDeleteModal

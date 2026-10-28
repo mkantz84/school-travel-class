@@ -1,13 +1,12 @@
 // Cloudflare Pages Function – handles every request under /api/*
-// Storage: D1 (binding "DB"). No access code required – family & creator flows use direct URLs.
+// Storage: D1 (binding "DB"), optional R2 (binding "TRIP_IMAGES"), Gemini API ("GEMINI_API_KEY")
 
-const ROLE_TEMPLATE = [
-  { title: 'ארוחת ערב' },
-  { title: 'ארוחת בוקר' },
-  { title: 'סנדוויצ׳ים' },
-  { title: 'פיקניק' },
-  { title: 'הפעלה / הדרכה' },
-];
+import { serveTripImage } from './_agents/imageAgent.js';
+import {
+  executeInitialAgents,
+  executeRecalculateAgents,
+  approveAgentSuggestions,
+} from './_agents/orchestrator.js';
 
 const FAMILY_FIELDS = ['name', 'parents', 'kids_names', 'phone', 'adults', 'kids', 'notes'];
 const TRIP_FIELDS = [
@@ -15,10 +14,19 @@ const TRIP_FIELDS = [
   'lodging', 'lodging_phone', 'lodging_details', 'missing_items', 'food_notes', 'schedule',
   'focalizer_family_id', 'focalizer_name', 'focalizer_phone', 'tools_name', 'tools_phone',
   'included_expenses', 'plans_deadline', 'final_check', 'gear_keeper', 'shortages', 'status',
+  'expected_people', 'image_url', 'image_style', 'ai_status',
 ];
-const MEAL_FIELDS = ['title', 'responsible', 'phone', 'menu', 'helpers', 'tools', 'plan_received', 'sort'];
-const GEAR_FIELDS = ['item', 'needed_for', 'brought_by'];
+const MEAL_FIELDS = ['title', 'responsible', 'phone', 'menu', 'helpers', 'tools', 'plan_received', 'sort', 'source', 'ai_key'];
+const GEAR_FIELDS = ['item', 'needed_for', 'brought_by', 'source', 'ai_key', 'quantity'];
 const EXPENSE_FIELDS = ['family_id', 'description', 'amount', 'included', 'split_families'];
+
+const TRIP_PUBLIC_COLS = `
+  id, name, start_date, end_date, destination, meeting_time, meeting_place,
+  lodging, lodging_phone, lodging_details, missing_items, food_notes, schedule,
+  focalizer_family_id, focalizer_name, focalizer_phone, tools_name, tools_phone,
+  included_expenses, plans_deadline, final_check, gear_keeper, shortages, status,
+  expected_people, image_url, image_style, ai_status, created_at
+`;
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -27,7 +35,10 @@ const json = (data, status = 200) =>
   });
 
 class HttpError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
 }
 
 function pick(body, fields) {
@@ -53,21 +64,75 @@ async function update(db, table, id, data) {
 const all = async (db, sql, ...args) => (await db.prepare(sql).bind(...args).all()).results;
 const first = (db, sql, ...args) => db.prepare(sql).bind(...args).first();
 
+let schemaInitialized = false;
+
 async function ensureSchema(db) {
+  if (schemaInitialized) return;
   await db.prepare(`CREATE TABLE IF NOT EXISTS gear (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trip_id INTEGER NOT NULL,
     item TEXT NOT NULL,
     needed_for TEXT DEFAULT '',
     brought_by TEXT DEFAULT '',
+    source TEXT DEFAULT 'user',
+    ai_key TEXT DEFAULT '',
+    quantity TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now'))
   )`).run();
 
-  try {
-    await db.prepare(`ALTER TABLE expenses ADD COLUMN split_families TEXT DEFAULT ''`).run();
-  } catch (_) {
-    // Column already exists
+  const alterStatements = [
+    `ALTER TABLE expenses ADD COLUMN split_families TEXT DEFAULT ''`,
+    `ALTER TABLE trips ADD COLUMN expected_people INTEGER DEFAULT 0`,
+    `ALTER TABLE trips ADD COLUMN image_url TEXT DEFAULT ''`,
+    `ALTER TABLE trips ADD COLUMN image_style TEXT DEFAULT ''`,
+    `ALTER TABLE trips ADD COLUMN image_data TEXT DEFAULT ''`,
+    `ALTER TABLE trips ADD COLUMN ai_status TEXT DEFAULT ''`,
+    `ALTER TABLE meals ADD COLUMN source TEXT DEFAULT 'user'`,
+    `ALTER TABLE meals ADD COLUMN ai_key TEXT DEFAULT ''`,
+    `ALTER TABLE gear ADD COLUMN source TEXT DEFAULT 'user'`,
+    `ALTER TABLE gear ADD COLUMN ai_key TEXT DEFAULT ''`,
+    `ALTER TABLE gear ADD COLUMN quantity TEXT DEFAULT ''`,
+  ];
+
+  for (const stmt of alterStatements) {
+    try {
+      await db.prepare(stmt).run();
+    } catch (_) {
+      // Column already exists
+    }
   }
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS agent_runs (
+    id TEXT PRIMARY KEY,
+    trip_id INTEGER NOT NULL,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    summary TEXT DEFAULT '',
+    error TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now'))
+  )`).run();
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS agent_suggestions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    trip_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    subtitle TEXT DEFAULT '',
+    needed_for TEXT DEFAULT '',
+    ai_key TEXT DEFAULT '',
+    reason TEXT DEFAULT '',
+    payload TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at TEXT DEFAULT (datetime('now'))
+  )`).run();
+
+  await db.prepare(`CREATE TABLE IF NOT EXISTS trip_image_chunks (
+    trip_id INTEGER NOT NULL,
+    chunk_idx INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (trip_id, chunk_idx)
+  )`).run();
 
   await db.prepare(`CREATE TABLE IF NOT EXISTS _app_migrations (
     name TEXT PRIMARY KEY,
@@ -86,11 +151,13 @@ async function ensureSchema(db) {
       db.prepare(`INSERT INTO _app_migrations (name) VALUES ('0003_clear_old_trips')`),
     ]);
   }
+
+  schemaInitialized = true;
 }
 
 async function getTripFull(db, id) {
   await ensureSchema(db);
-  const trip = await first(db, 'SELECT * FROM trips WHERE id = ?', id);
+  const trip = await first(db, `SELECT ${TRIP_PUBLIC_COLS} FROM trips WHERE id = ?`, id);
   if (!trip) throw new HttpError(404, 'הטיול לא נמצא');
   const [participants, meals, gear, expenses] = await Promise.all([
     all(db, 'SELECT * FROM participants WHERE trip_id = ?', id),
@@ -101,7 +168,24 @@ async function getTripFull(db, id) {
   return { trip, participants, meals, gear, expenses };
 }
 
-async function route(request, env, parts) {
+function normalizeFamilyName(raw) {
+  return String(raw || '')
+    .trim()
+    .replace(/^משפחת\s+/u, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function assertAdminFamily(trip, requestingFamilyId, actionMessage) {
+  const reqId = Number(requestingFamilyId) || 0;
+  const adminFamilyId = Number(trip.focalizer_family_id) || 0;
+  if (!adminFamilyId || reqId !== adminFamilyId) {
+    throw new HttpError(403, actionMessage);
+  }
+}
+
+async function route(request, env, parts, ctx) {
   const db = env.DB;
   await ensureSchema(db);
   const method = request.method;
@@ -112,24 +196,18 @@ async function route(request, env, parts) {
   if (res === 'bootstrap' && method === 'GET') {
     const [families, trips, counts] = await Promise.all([
       all(db, 'SELECT * FROM families ORDER BY name'),
-      all(db, 'SELECT * FROM trips ORDER BY start_date DESC, id DESC'),
-      all(db, `SELECT t.id AS trip_id,
-                 (SELECT COUNT(*) FROM participants p WHERE p.trip_id = t.id) AS families,
-                 (SELECT COALESCE(SUM(adults + kids),0) FROM participants p WHERE p.trip_id = t.id) AS people,
-                 (SELECT COALESCE(SUM(amount),0) FROM expenses e WHERE e.trip_id = t.id AND e.included = 1) AS total
-               FROM trips t`),
+      all(db, `SELECT ${TRIP_PUBLIC_COLS} FROM trips ORDER BY start_date DESC, id DESC`),
+      all(
+        db,
+        `SELECT t.id AS trip_id,
+                (SELECT COUNT(*) FROM participants p WHERE p.trip_id = t.id) AS families,
+                (SELECT COALESCE(SUM(adults + kids),0) FROM participants p WHERE p.trip_id = t.id) AS people,
+                (SELECT COALESCE(SUM(amount),0) FROM expenses e WHERE e.trip_id = t.id AND e.included = 1) AS total
+         FROM trips t`
+      ),
     ]);
     return json({ families, trips, counts });
   }
-
-function normalizeFamilyName(raw) {
-  return String(raw || '')
-    .trim()
-    .replace(/^משפחת\s+/u, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-}
 
   // ---- families ----
   if (res === 'families') {
@@ -167,6 +245,7 @@ function normalizeFamilyName(raw) {
     }
     if (method === 'DELETE' && id) {
       await db.batch([
+        db.prepare('UPDATE trips SET focalizer_family_id = NULL WHERE focalizer_family_id = ?').bind(id),
         db.prepare('DELETE FROM expenses WHERE family_id = ?').bind(id),
         db.prepare('DELETE FROM participants WHERE family_id = ?').bind(id),
         db.prepare('DELETE FROM families WHERE id = ?').bind(id),
@@ -180,20 +259,80 @@ function normalizeFamilyName(raw) {
     if (method === 'POST' && !id) {
       const data = pick(body, TRIP_FIELDS);
       if (!data.name) throw new HttpError(400, 'חסר שם לטיול');
+      if (data.focalizer_family_id !== undefined) {
+        data.focalizer_family_id = data.focalizer_family_id ? Number(data.focalizer_family_id) : null;
+      }
+      if (data.expected_people !== undefined) {
+        data.expected_people = Math.max(0, parseInt(data.expected_people, 10) || 0);
+      }
+      data.ai_status = 'running';
       const tripId = await insert(db, 'trips', data);
-      const stmts = ROLE_TEMPLATE.map((m, i) =>
-        db.prepare('INSERT INTO meals (trip_id, title, responsible, menu, sort) VALUES (?,?,?,?,?)')
-          .bind(tripId, m.title, '', '', i)
-      );
-      await db.batch(stmts);
+      const createdTrip = await first(db, `SELECT ${TRIP_PUBLIC_COLS} FROM trips WHERE id = ?`, tripId);
+
+      if (createdTrip) {
+        try {
+          await executeInitialAgents(env, db, createdTrip);
+        } catch (err) {
+          console.warn('Initial agents error during trip creation:', err);
+        }
+      }
+
       return json({ id: tripId });
     }
+
+    // Serve generated trip image from R2, D1 trip_image_chunks, or legacy trips.image_data
+    if (method === 'GET' && id && sub === 'image') {
+      const imgResponse = await serveTripImage(env, db, id);
+      if (imgResponse) return imgResponse;
+      throw new HttpError(404, 'Image not found');
+    }
+
+    // AI Agents endpoints under /api/trips/:id/agents/:action
+    if (id && sub === 'agents') {
+      const trip = await first(db, `SELECT ${TRIP_PUBLIC_COLS} FROM trips WHERE id = ?`, id);
+      if (!trip) throw new HttpError(404, 'הטיול לא נמצא');
+
+      if (method === 'POST' && subId === 'initial') {
+        return json(await executeInitialAgents(env, db, trip, body || {}));
+      }
+
+      if (method === 'POST' && subId === 'recalculate') {
+        assertAdminFamily(
+          trip,
+          body?.family_id,
+          'רק המשפחה המנהלת של הטיול מורשית להריץ חישוב מחדש של סוכני ה-AI'
+        );
+        return json(await executeRecalculateAgents(env, db, trip));
+      }
+
+      if (method === 'POST' && subId === 'approve') {
+        assertAdminFamily(
+          trip,
+          body?.family_id,
+          'רק המשפחה המנהלת של הטיול מורשית לאשר הצעות AI'
+        );
+        return json(await approveAgentSuggestions(db, id, body?.suggestion_ids));
+      }
+    }
+
     if (method === 'GET' && id && !sub) return json(await getTripFull(db, id));
-    if (method === 'PUT' && id && !sub) { await update(db, 'trips', id, pick(body, TRIP_FIELDS)); return json({ ok: true }); }
+    if (method === 'PUT' && id && !sub) {
+      const data = pick(body, TRIP_FIELDS);
+      if (data.focalizer_family_id !== undefined) {
+        data.focalizer_family_id = data.focalizer_family_id ? Number(data.focalizer_family_id) : null;
+      }
+      if (data.expected_people !== undefined) {
+        data.expected_people = Math.max(0, parseInt(data.expected_people, 10) || 0);
+      }
+      await update(db, 'trips', id, data);
+      return json({ ok: true });
+    }
     if (method === 'DELETE' && id && !sub) {
-      await db.batch(['participants', 'meals', 'gear', 'checklist', 'expenses']
-        .map((t) => db.prepare(`DELETE FROM ${t} WHERE trip_id = ?`).bind(id))
-        .concat(db.prepare('DELETE FROM trips WHERE id = ?').bind(id)));
+      await db.batch(
+        ['participants', 'meals', 'gear', 'checklist', 'expenses', 'agent_runs', 'agent_suggestions', 'trip_image_chunks']
+          .map((t) => db.prepare(`DELETE FROM ${t} WHERE trip_id = ?`).bind(id))
+          .concat(db.prepare('DELETE FROM trips WHERE id = ?').bind(id))
+      );
       return json({ ok: true });
     }
 
@@ -205,9 +344,13 @@ function normalizeFamilyName(raw) {
         if (body.notes !== undefined) {
           await db.prepare('UPDATE families SET notes = ? WHERE id = ?').bind(body.notes, subId).run();
         }
-        await db.prepare(`INSERT INTO participants (trip_id, family_id, adults, kids) VALUES (?,?,?,?)
-                          ON CONFLICT(trip_id, family_id) DO UPDATE SET adults = excluded.adults, kids = excluded.kids`)
-          .bind(id, subId, adults, kids).run();
+        await db
+          .prepare(
+            `INSERT INTO participants (trip_id, family_id, adults, kids) VALUES (?,?,?,?)
+             ON CONFLICT(trip_id, family_id) DO UPDATE SET adults = excluded.adults, kids = excluded.kids`
+          )
+          .bind(id, subId, adults, kids)
+          .run();
         return json({ ok: true });
       }
       if (method === 'DELETE') {
@@ -228,32 +371,52 @@ function normalizeFamilyName(raw) {
     if (sub === 'expenses' && method === 'POST') {
       const data = pick(body, EXPENSE_FIELDS);
       data.amount = Number(data.amount);
-      if (!data.family_id || !data.description || !(data.amount > 0)) throw new HttpError(400, 'יש למלא מי שילם, עבור מה וסכום');
+      if (!data.family_id || !data.description || !(data.amount > 0))
+        throw new HttpError(400, 'יש למלא מי שילם, עבור מה וסכום');
       return json({ id: await insert(db, 'expenses', { ...data, trip_id: id }) });
     }
   }
 
   // ---- single items ----
   if (res === 'meals' && id) {
-    if (method === 'PUT') { await update(db, 'meals', id, pick(body, MEAL_FIELDS)); return json({ ok: true }); }
-    if (method === 'DELETE') { await db.prepare('DELETE FROM meals WHERE id = ?').bind(id).run(); return json({ ok: true }); }
+    if (method === 'PUT') {
+      await update(db, 'meals', id, pick(body, MEAL_FIELDS));
+      return json({ ok: true });
+    }
+    if (method === 'DELETE') {
+      await db.prepare('DELETE FROM meals WHERE id = ?').bind(id).run();
+      return json({ ok: true });
+    }
   }
   if (res === 'gear' && id) {
-    if (method === 'PUT') { await update(db, 'gear', id, pick(body, GEAR_FIELDS)); return json({ ok: true }); }
-    if (method === 'DELETE') { await db.prepare('DELETE FROM gear WHERE id = ?').bind(id).run(); return json({ ok: true }); }
+    if (method === 'PUT') {
+      await update(db, 'gear', id, pick(body, GEAR_FIELDS));
+      return json({ ok: true });
+    }
+    if (method === 'DELETE') {
+      await db.prepare('DELETE FROM gear WHERE id = ?').bind(id).run();
+      return json({ ok: true });
+    }
   }
   if (res === 'expenses' && id) {
-    if (method === 'PUT') { await update(db, 'expenses', id, pick(body, EXPENSE_FIELDS)); return json({ ok: true }); }
-    if (method === 'DELETE') { await db.prepare('DELETE FROM expenses WHERE id = ?').bind(id).run(); return json({ ok: true }); }
+    if (method === 'PUT') {
+      await update(db, 'expenses', id, pick(body, EXPENSE_FIELDS));
+      return json({ ok: true });
+    }
+    if (method === 'DELETE') {
+      await db.prepare('DELETE FROM expenses WHERE id = ?').bind(id).run();
+      return json({ ok: true });
+    }
   }
 
   throw new HttpError(404, 'Not found');
 }
 
-export async function onRequest({ request, env, params }) {
+export async function onRequest(context) {
+  const { request, env, params } = context;
   const parts = [].concat(params.path || []);
   try {
-    return await route(request, env, parts);
+    return await route(request, env, parts, context);
   } catch (err) {
     return json({ error: err.message || 'שגיאה' }, err.status || 500);
   }

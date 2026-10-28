@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Plus, Minus, Share2, Trash2, Edit3, ExternalLink, MapPin, Compass, Calendar, ArrowRight, Check, Sparkles, Users, AlertCircle
+  Plus, Minus, Share2, Trash2, Edit3, ExternalLink, MapPin, Compass, Calendar, ArrowRight, Check, Sparkles, Users, AlertCircle, Crown
 } from 'lucide-react';
 import { api, getTripImage, findDuplicateFamily } from '../api';
 import DateRangePicker, { formatHebrewRange } from './DateRangePicker';
+import CustomSelect from './CustomSelect';
 import Modal, { ConfirmDeleteModal } from './Modal';
 
 const EMPTY_TRIP = {
@@ -13,6 +14,8 @@ const EMPTY_TRIP = {
   lodging: '',
   destination: '',
   schedule: '',
+  focalizer_family_id: '',
+  expected_people: 20,
 };
 
 export default function CreatorPage({ tripId, trips, families = [], counts, onRefresh, showToast }) {
@@ -25,6 +28,11 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
   const [confirmDelete, setConfirmDelete] = useState(null); // { title, message, onConfirm }
   const [deleting, setDeleting] = useState(false);
 
+  const adminFamilyOptions = [
+    { value: '', label: '— ללא משפחה מנהלת —' },
+    ...families.map((f) => ({ value: String(f.id), label: f.name })),
+  ];
+
   useEffect(() => {
     if (tripId) {
       api('trips/' + tripId).then((d) => {
@@ -36,6 +44,8 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
           lodging: d.trip.lodging || '',
           destination: d.trip.destination || '',
           schedule: d.trip.schedule || '',
+          focalizer_family_id: d.trip.focalizer_family_id ? String(d.trip.focalizer_family_id) : '',
+          expected_people: d.trip.expected_people || 20,
         });
       });
     } else {
@@ -51,11 +61,16 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
     }
     setSaving(true);
     try {
-      const res = await api('trips', 'POST', newForm);
+      const payload = {
+        ...newForm,
+        focalizer_family_id: newForm.focalizer_family_id ? Number(newForm.focalizer_family_id) : null,
+        expected_people: Math.max(1, Number(newForm.expected_people) || 20),
+      };
+      const res = await api('trips', 'POST', payload);
       setNewModalOpen(false);
       setNewForm(EMPTY_TRIP);
       await onRefresh();
-      showToast('הטיול נוצר בהצלחה!');
+      showToast('הטיול נוצר! סוכני ה-AI בנו איור, תפקידים ורשימת ציוד מותאמת ✨');
       window.location.hash = `#/admin/${res.id}`;
     } catch (err) {
       showToast(err.message);
@@ -72,7 +87,14 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
     }
     setSaving(true);
     try {
-      await api('trips/' + tripId, 'PUT', form);
+      const payload = {
+        ...form,
+        focalizer_family_id: form.focalizer_family_id ? Number(form.focalizer_family_id) : null,
+        expected_people: Math.max(1, Number(form.expected_people) || 20),
+      };
+      await api('trips/' + tripId, 'PUT', payload);
+      const updated = await api('trips/' + tripId);
+      setActiveTrip(updated.trip);
       await onRefresh();
       showToast('פרטי הטיול נשמרו ✨');
     } catch (err) {
@@ -170,7 +192,8 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
   if (tripId && activeTrip) {
     const shareUrl = `${window.location.origin}/#/trip/${activeTrip.id}`;
     const dateLabel = formatHebrewRange(form.start_date, form.end_date);
-    const tripBanner = getTripImage(form);
+    const tripBanner = getTripImage({ ...activeTrip, ...form });
+    const selectedAdminFam = families.find((f) => String(f.id) === String(form.focalizer_family_id));
 
     return (
       <div className="space-y-6">
@@ -230,10 +253,18 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
             <div className="absolute inset-0 bg-gradient-to-t from-slate-900/70 via-slate-900/20 to-transparent" />
             <div className="absolute bottom-4 right-6 left-6 flex flex-wrap items-end justify-between gap-3 text-white">
               <div>
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/20 backdrop-blur-xs text-[11px] font-medium mb-1">
-                  <Sparkles className="w-3 h-3" />
-                  איור הטיול מתעדכן אוטומטית לפי השם והיעד
-                </span>
+                <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/20 backdrop-blur-xs text-[11px] font-medium">
+                    <Sparkles className="w-3 h-3" />
+                    {activeTrip.image_style ? `איור AI ייחודי (${activeTrip.image_style})` : 'איור הטיול מתעדכן אוטומטית לפי השם והיעד'}
+                  </span>
+                  {selectedAdminFam && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-400/90 text-slate-900 text-[11px] font-bold">
+                      <Crown className="w-3 h-3" />
+                      משפחה מנהלת: {selectedAdminFam.name}
+                    </span>
+                  )}
+                </div>
                 <h1 className="text-2xl font-extrabold drop-shadow-xs">{form.name || 'טיול חדש'}</h1>
               </div>
             </div>
@@ -290,6 +321,41 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
                 </div>
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Crown className="w-4 h-4 text-amber-500" />
+                    משפחה מנהלת לטיול (Admin)
+                  </span>
+                </label>
+                <CustomSelect
+                  options={adminFamilyOptions}
+                  value={form.focalizer_family_id || ''}
+                  onChange={(val) => setForm({ ...form, focalizer_family_id: val })}
+                  placeholder="בחרו משפחה מנהלת מהרשימה..."
+                />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  רק המשפחה המנהלת שתבחר כאן תוכל להפעיל את כפתור החישוב מחדש של סוכני ה-AI בדף הטיול.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  מספר משתתפים משוער (לחישוב כמויות AI)
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="300"
+                  value={form.expected_people}
+                  onChange={(e) => setForm({ ...form, expected_people: e.target.value })}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-forest-500 focus:ring-2 focus:ring-forest-500/15"
+                />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  משמש לחישוב כמויות מצרכים וכלים כשהמשפחות טרם נרשמו (או יחושב לפי כמות הנרשמים בפועל).
+                </p>
+              </div>
+
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">מסלולי הטיול</label>
                 <textarea
@@ -329,12 +395,12 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
         <div className="md:col-span-3 p-6 sm:p-8 flex flex-col justify-center space-y-4">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-forest-50 text-forest-700 text-xs font-semibold w-fit">
             <Compass className="w-3.5 h-3.5" />
-            מערכת מארגן הטיולים
+            מערכת מארגן הטיולים · מופעלת בסוכני AI
           </div>
           <div className="space-y-1.5">
             <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-800">ניהול ותכנון טיולי הכיתה</h1>
             <p className="text-sm text-slate-500 leading-relaxed">
-              צרו טיול חדש, הגדירו מסלולים ומקום לינה, ושתפו לינק ישיר לקבוצת הוואטסאפ של הטיול להרשמה וחלוקת תפקידים.
+              צרו טיול חדש והסוכנים החכמים שלנו יבנו עבורכם אוטומטית איור מאויר ייחודי, רשימת תפקידים וארוחות לפי ימי הטיול, ורשימת כלים ומצרכים מותאמת לכמות המשתתפים.
             </p>
           </div>
           <div>
@@ -383,6 +449,7 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
               const c = counts.find((x) => x.trip_id === t.id) || { families: 0, people: 0 };
               const dateStr = formatHebrewRange(t.start_date, t.end_date);
               const thumb = getTripImage(t);
+              const adminFam = families.find((f) => Number(f.id) === Number(t.focalizer_family_id));
               return (
                 <div
                   key={t.id}
@@ -416,6 +483,12 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
                         <span className="px-2.5 py-0.5 rounded-full bg-forest-50 text-forest-700 font-medium">
                           {c.families} משפחות · {c.people} משתתפים
                         </span>
+                        {adminFam && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 font-semibold border border-amber-200/70">
+                            <Crown className="w-3 h-3 text-amber-500" />
+                            מנהל/ת: {adminFam.name}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -543,8 +616,16 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
         )}
       </section>
 
-      <Modal open={newModalOpen} onClose={() => setNewModalOpen(false)} title="יצירת טיול חדש ⛺">
+      <Modal open={newModalOpen} onClose={() => !saving && setNewModalOpen(false)} title="יצירת טיול חדש ⛺" maxWidth="max-w-lg">
         <form onSubmit={handleCreateTrip} className="space-y-4">
+          <div className="bg-gradient-to-l from-forest-50 to-sun-50/70 border border-forest-200/70 rounded-2xl p-3 text-xs text-slate-700 flex items-start gap-2.5">
+            <Sparkles className="w-4 h-4 text-forest-600 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-bold text-forest-800">בניית טיול חכמה (AI): </span>
+              בעת היצירה יופעלו 3 סוכנים במקביל ליצירת איור ייחודי לטיול, רשימת תפקידים וארוחות לפי מספר הימים, ורשימת כלים ומצרכים מותאמת לכמות המשתתפים.
+            </div>
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">שם / נושא הטיול *</label>
             <input
@@ -566,14 +647,43 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
             />
           </div>
 
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">מקום הלינה</label>
+              <input
+                type="text"
+                value={newForm.lodging}
+                onChange={(e) => setNewForm({ ...newForm, lodging: e.target.value })}
+                placeholder="חניון / קמפינג / צימרים..."
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-forest-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">מספר משתתפים משוער</label>
+              <input
+                type="number"
+                min="1"
+                max="300"
+                value={newForm.expected_people}
+                onChange={(e) => setNewForm({ ...newForm, expected_people: e.target.value })}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-forest-500"
+              />
+            </div>
+          </div>
+
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">מקום הלינה</label>
-            <input
-              type="text"
-              value={newForm.lodging}
-              onChange={(e) => setNewForm({ ...newForm, lodging: e.target.value })}
-              placeholder="חניון / קמפינג..."
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-forest-500"
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              <span className="inline-flex items-center gap-1">
+                <Crown className="w-3.5 h-3.5 text-amber-500" />
+                משפחה מנהלת לטיול (Admin)
+              </span>
+            </label>
+            <CustomSelect
+              options={adminFamilyOptions}
+              value={newForm.focalizer_family_id || ''}
+              onChange={(val) => setNewForm({ ...newForm, focalizer_family_id: val })}
+              placeholder="בחרו משפחה מנהלת..."
             />
           </div>
 
@@ -588,20 +698,33 @@ export default function CreatorPage({ tripId, trips, families = [], counts, onRe
             />
           </div>
 
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">מידע נוסף / לו״ז / הערות</label>
+            <textarea
+              rows={2}
+              value={newForm.schedule}
+              onChange={(e) => setNewForm({ ...newForm, schedule: e.target.value })}
+              placeholder="שעת מפגש, מדורה, פויקה, דגשים..."
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-forest-500"
+            />
+          </div>
+
           <div className="flex items-center justify-end gap-2 pt-2">
             <button
               type="button"
+              disabled={saving}
               onClick={() => setNewModalOpen(false)}
-              className="px-4 py-2 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50"
+              className="px-4 py-2 rounded-xl border border-slate-200 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
             >
               ביטול
             </button>
             <button
               type="submit"
               disabled={saving}
-              className="px-5 py-2 rounded-xl bg-forest-500 hover:bg-forest-600 text-white text-sm font-semibold"
+              className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-forest-500 hover:bg-forest-600 text-white text-sm font-semibold disabled:opacity-60"
             >
-              {saving ? 'יוצר...' : 'יצירת טיול'}
+              <Sparkles className="w-4 h-4" />
+              {saving ? 'סוכני ה-AI בונים את הטיול...' : 'יצירת טיול והפעלת סוכנים'}
             </button>
           </div>
         </form>
