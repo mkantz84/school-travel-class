@@ -20,18 +20,23 @@ export async function executeInitialAgents(env, db, trip, options = {}) {
 
   try {
     if (options?.replace_ai) {
-      await db.batch([
-        db
-          .prepare(
-            "DELETE FROM meals WHERE trip_id = ? AND source = 'ai' AND (responsible IS NULL OR responsible = '')"
-          )
-          .bind(tripId),
+      const stmts = [
         db
           .prepare(
             "DELETE FROM gear WHERE trip_id = ? AND source = 'ai' AND (brought_by IS NULL OR brought_by = '')"
           )
           .bind(tripId),
-      ]);
+      ];
+      if (!options?.gear_only) {
+        stmts.unshift(
+          db
+            .prepare(
+              "DELETE FROM meals WHERE trip_id = ? AND source = 'ai' AND (responsible IS NULL OR responsible = '')"
+            )
+            .bind(tripId)
+        );
+      }
+      await db.batch(stmts);
     }
 
     const [{ results: participants = [] }, { results: existingMeals = [] }, { results: existingGear = [] }] =
@@ -45,9 +50,11 @@ export async function executeInitialAgents(env, db, trip, options = {}) {
 
     // Run Agent 1 (Image) in parallel with Agent 2 (Meals/Roles) -> Agent 3 (Gear/Supplies)
     const [imageResult, mealsAndGearResult] = await Promise.all([
-      runImageAgent(env, trip),
+      options?.skip_image || options?.gear_only ? Promise.resolve(null) : runImageAgent(env, trip),
       (async () => {
-        const suggestedMeals = await runMealsAgent(env, trip, existingMeals, headcount);
+        const suggestedMeals = options?.gear_only
+          ? []
+          : await runMealsAgent(env, trip, existingMeals, headcount);
         const combinedMeals = [
           ...existingMeals,
           ...suggestedMeals.map((m) => ({ title: m.title, menu: m.menu, ai_key: m.ai_key })),

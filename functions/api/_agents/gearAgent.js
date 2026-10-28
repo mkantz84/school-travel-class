@@ -10,11 +10,11 @@ const GEAR_SCHEMA = {
         properties: {
           ai_key: {
             type: 'string',
-            description: 'Canonical key for this item type, e.g. eggs, pita_pack, salad_veggies, water_sixpack, cooking_pot, campfire_wood',
+            description: 'Canonical key for this item type, e.g. challah, eggs, pita_pack, salad_veggies, water_sixpack, cooking_pot',
           },
           base_name: {
             type: 'string',
-            description: 'Hebrew name of the tool or ingredient without quantity, e.g. ביצים, מארז פיתות, ירקות לסלט, סיר בישול גדול',
+            description: 'Hebrew name of the tool or ingredient without quantity, e.g. חלות לשבת, ביצים לארוחת בוקר, מארז פיתות, ירקות לסלט',
           },
           needed_for: {
             type: 'string',
@@ -26,15 +26,15 @@ const GEAR_SCHEMA = {
           },
           per_person_qty: {
             type: 'number',
-            description: 'Amount needed per person (0 if fixed equipment)',
+            description: 'Modest amount needed per person (0 if fixed equipment or group kit)',
           },
           slot_size: {
             type: 'number',
-            description: 'How many units one family should bring in a single claimable slot (e.g. 12 for eggs, 10 for pitas, 1 for a pot)',
+            description: 'How many units one family brings in a single slot (e.g. 2 for challahs, 12 for eggs, 10 for pitas/rolls, 2 for kg veggies, 1 for a kit/pot)',
           },
           fixed_slots: {
             type: 'number',
-            description: 'If per_person_qty is 0, how many total slots are needed for the group (e.g. 1 or 2)',
+            description: 'If per_person_qty is 0, how many total slots are needed for the whole group (usually 1 or 2)',
           },
           reason: {
             type: 'string',
@@ -72,72 +72,72 @@ function buildFallbackGearCatalog(trip, mealsList) {
   const catalog = [
     {
       ai_key: 'eggs',
-      base_name: 'ביצים לארוחת בוקר',
+      base_name: 'תבנית ביצים לארוחת בוקר',
       needed_for: breakfastTitle,
       unit: 'יח׳',
-      per_person_qty: 1.5,
+      per_person_qty: 0.9,
       slot_size: 12,
       fixed_slots: 1,
-      reason: 'חישוב של כ-1.5 ביצים למשתתף (חלוקה לתבניות של 12 ביצים למשפחה)',
+      reason: 'כביצה אחת למשתתף בממוצע (תבנית של 12 ביצים לכל ~13 משתתפים)',
     },
     {
       ai_key: 'salad_veggies',
       base_name: 'עגבניות, מלפפונים וירקות לסלט',
       needed_for: breakfastTitle,
       unit: 'ק״ג',
-      per_person_qty: 0.2,
+      per_person_qty: 0.12,
       slot_size: 2,
       fixed_slots: 1,
-      reason: 'כ-200 גרם ירקות למשתתף (שקית של 2 ק״ג למשפחה)',
+      reason: 'כ-120 גרם ירקות למשתתף (שקית של 2 ק״ג לכל ~15 משתתפים)',
     },
     {
       ai_key: 'bread_and_pita',
-      base_name: 'מארז פיתות / לחם פרוס טרי',
+      base_name: 'מארז פיתות / לחמניות טריות',
       needed_for: dinnerTitle,
       unit: 'יח׳',
-      per_person_qty: 1.5,
+      per_person_qty: 0.85,
       slot_size: 10,
       fixed_slots: 1,
-      reason: 'חבילת 10 פיתות/לחם לכל ~7 משתתפים',
+      reason: 'מארז 10 פיתות/לחמניות לכל ~12 משתתפים',
     },
     {
       ai_key: 'spreads_cheeses',
-      base_name: 'גבינות וממרחים (קוטג׳, לבנה, חומוס, טחינה)',
+      base_name: 'מארז גבינות וממרחים (קוטג׳, לבנה, חומוס, טחינה)',
       needed_for: breakfastTitle,
       unit: 'מארז',
-      per_person_qty: 0.12,
+      per_person_qty: 0.07,
       slot_size: 1,
       fixed_slots: 1,
-      reason: 'מארז של 2-3 גבינות/ממרחים לכל ~8 משתתפים',
+      reason: 'מארז גבינות וממרחים לכל ~14 משתתפים',
     },
     {
       ai_key: 'dinner_main_pot',
       base_name: 'סיר גדול / מחבת רחבה וכף הגשה',
       needed_for: dinnerTitle,
       unit: 'יח׳',
-      per_person_qty: 0.08,
+      per_person_qty: 0,
       slot_size: 1,
-      fixed_slots: 1,
-      reason: 'כלי בישול מרכזי לכל ~12 משתתפים',
+      fixed_slots: 2,
+      reason: 'כלי בישול מרכזי לארוחה המשותפת',
     },
     {
       ai_key: 'camping_stove',
       base_name: 'כירת גז / גזייה ובלון גז תקין',
       needed_for: dinnerTitle,
       unit: 'יח׳',
-      per_person_qty: 0.07,
+      per_person_qty: 0,
       slot_size: 1,
       fixed_slots: 1,
-      reason: 'עמדת בישול לכל ~15 משתתפים',
+      reason: 'עמדת בישול וחימום בשטח',
     },
     {
       ai_key: 'cutting_board_knife',
       base_name: 'קרש חיתוך גדול וסכין חדה',
       needed_for: breakfastTitle,
       unit: 'סט',
-      per_person_qty: 0.08,
+      per_person_qty: 0,
       slot_size: 1,
-      fixed_slots: 1,
+      fixed_slots: 2,
       reason: 'עמדת חיתוך סלטים והכנות משותפת',
     },
     {
@@ -145,49 +145,49 @@ function buildFallbackGearCatalog(trip, mealsList) {
       base_name: 'פירות העונה ונשנושים למסלול',
       needed_for: lunchTitle,
       unit: 'מארז',
-      per_person_qty: 0.1,
+      per_person_qty: 0.07,
       slot_size: 1,
       fixed_slots: 1,
-      reason: 'מארז פירות וחטיפים לכל ~10 משתתפים במסלול',
+      reason: 'מארז פירות וחטיפים לכל ~14 משתתפים במסלול',
     },
     {
       ai_key: 'coffee_kit_milk',
       base_name: 'חלב, עוגה בחושה ועוגיות לפק״ל קפה',
       needed_for: coffeeTitle,
       unit: 'מארז',
-      per_person_qty: 0.09,
+      per_person_qty: 0.06,
       slot_size: 1,
       fixed_slots: 1,
-      reason: 'חלב וכיבוד מתוק לפי מספר המשפחות בטיול',
+      reason: 'חלב וכיבוד מתוק לפינה החמה',
     },
     {
       ai_key: 'water_coolers',
       base_name: 'שישיית מים מינרליים / ג׳ריקן מים',
       needed_for: 'כללי',
       unit: 'שישייה',
-      per_person_qty: 0.12,
+      per_person_qty: 0.07,
       slot_size: 1,
       fixed_slots: 1,
-      reason: 'גיבוי מים לשתייה ולבישול בשטח לפי כמות המשתתפים',
+      reason: 'גיבוי מים משותף לבישול ולשתייה (שישייה לכל ~14 משתתפים)',
     },
     {
       ai_key: 'folding_table',
       base_name: 'שולחן שטח מתקפל ומפה',
       needed_for: 'כללי',
       unit: 'יח׳',
-      per_person_qty: 0.08,
+      per_person_qty: 0.06,
       slot_size: 1,
       fixed_slots: 1,
-      reason: 'שולחן הגשה ואכילה לכל ~12 משתתפים',
+      reason: 'שולחן הגשה משותף לכל ~15 משתתפים',
     },
     {
       ai_key: 'trash_bags_wipes',
-      base_name: 'שקיות אשפה חזקות, מגבונים ונייר סופג',
+      base_name: 'גליל שקיות אשפה חזקות, מגבונים ונייר סופג',
       needed_for: 'כללי',
       unit: 'ערכה',
       per_person_qty: 0,
       slot_size: 1,
-      fixed_slots: 2,
+      fixed_slots: 1,
       reason: 'שמירה על ניקיון החניון והמסלול',
     },
   ];
@@ -198,14 +198,93 @@ function buildFallbackGearCatalog(trip, mealsList) {
       base_name: 'עצים למדורה, מרשמלו ונייר כסף',
       needed_for: campfireTitle,
       unit: 'ערכה',
-      per_person_qty: 0.08,
+      per_person_qty: 0.06,
       slot_size: 1,
       fixed_slots: 1,
-      reason: 'עצים ומרשמלו לפי גודל הקבוצה סביב המדורה',
+      reason: 'עצים ומרשמלו סביב המדורה',
     });
   }
 
   return catalog;
+}
+
+/**
+ * Calibrates LLM-provided per-person quantities and slot caps so quantities stay realistic
+ * for family trips (where ~half of participants are children and meals are shared buffets).
+ */
+function computeRealisticSlotsNeeded(spec, effectivePeople) {
+  const nameAndKey = `${spec.ai_key || ''} ${spec.base_name || ''}`.toLowerCase();
+  const unit = String(spec.unit || 'יח׳').trim();
+  const perPerson = Number(spec.per_person_qty) || 0;
+  let slotSize = Math.max(1, Number(spec.slot_size) || 1);
+  const fixedSlots = Math.max(1, Number(spec.fixed_slots) || 1);
+
+  // 1. Challah (חלות): for ~25 people, 2 slots of 2 challahs (4 challahs total) is plenty.
+  if (/חלה|חלות|\bchallah/.test(nameAndKey)) {
+    const slots = effectivePeople <= 15 ? 1 : effectivePeople <= 32 ? 2 : 3;
+    return { slotsNeeded: slots, slotSize: 2, unit: 'יח׳' };
+  }
+
+  // 2. Eggs (ביצים) - use word boundary \beggs?\b so "veggies" never matches!
+  //    For 25 people -> 2 cartons of 12 eggs (24 eggs total).
+  if (/ביצים|ביצה|\beggs?\b/.test(nameAndKey)) {
+    const eggsNeeded = effectivePeople * 0.8;
+    const slots = Math.max(1, Math.round(eggsNeeded / 12));
+    return { slotsNeeded: slots, slotSize: 12, unit: 'יח׳' };
+  }
+
+  // 3. Vegetables & Fruits (ירקות / פירות): ~2 kg per slot, 1-2 slots for 25 people.
+  if (/ירקות|סלט|פירות|\bveggie|\bsalad|\bfruit/.test(nameAndKey)) {
+    const slots = effectivePeople <= 16 ? 1 : 2;
+    if (unit === 'ק״ג' || unit === 'ק"ג' || unit === 'kg') {
+      return { slotsNeeded: slots, slotSize: 2, unit: 'ק״ג' };
+    }
+    return { slotsNeeded: slots, slotSize: 1, unit };
+  }
+
+  // 4. Bread / Rolls / Pitas (פיתות / לחמניות / לחם):
+  //    If measured in individual units (יח׳) -> 10 per pack, 2 packs for 25 people.
+  //    If measured in packs/loaves (מארז / כיכר / חבילה) -> 1 per slot, 2 slots for 25 people.
+  if (/פיתות|לחמניות|לחם|\bpita|\bbread|\broll/.test(nameAndKey)) {
+    const slots = effectivePeople <= 15 ? 1 : 2;
+    const isPackInNameOrUnit =
+      /מארז|חבילה|כיכר|שקית/.test(unit) || /מארז|חבילה|כיכר/.test(spec.base_name || '');
+    if (isPackInNameOrUnit) {
+      return { slotsNeeded: slots, slotSize: 1, unit: 'מארז' };
+    }
+    return { slotsNeeded: slots, slotSize: 10, unit: 'יח׳' };
+  }
+
+  // 5. Trash bags, first aid, disposable tableware, coffee kit, tea herbs: 1 slot (or 2 for 30+ people).
+  if (
+    /אשפה|מגבונים|חד פעמי|מתכלים|עזרה ראשונה|פק"ל|פק״ל|תיונים|עשבי תיבול|\btrash|\bdisposable|\bcoffee|\btea/.test(
+      nameAndKey
+    )
+  ) {
+    const maxKits = effectivePeople > 30 ? 2 : 1;
+    return { slotsNeeded: maxKits, slotSize: 1, unit };
+  }
+
+  // General calculation for all other items:
+  // In family trips ~half of participants are kids, so effective adult portions ≈ 0.8 * headcount.
+  let slotsNeeded = Math.min(fixedSlots, 2);
+  if (perPerson > 0) {
+    const adjustedPeople = effectivePeople * 0.8;
+    const totalUnitsNeeded = Math.max(slotSize, adjustedPeople * perPerson);
+    const rawSlots = totalUnitsNeeded / slotSize;
+    slotsNeeded = Math.max(1, Math.floor(rawSlots + 0.6));
+  }
+
+  // Cap any single item at ~1 slot per 13 participants (so 25 people = max 2 slots per item)
+  const maxReasonableSlots = Math.max(2, Math.round(effectivePeople / 13));
+  slotsNeeded = Math.min(slotsNeeded, maxReasonableSlots);
+
+  // If unit is already a package/kit/jar, keep slotSize at 1 or 2 max so it never says "(8 מארז)"
+  if (/מארז|ערכה|צנצנת|שישייה|מגש|בקבוק|שקית/.test(unit) && slotSize > 2) {
+    slotSize = 1;
+  }
+
+  return { slotsNeeded, slotSize, unit };
 }
 
 /**
@@ -221,17 +300,7 @@ export function expandGearCatalogToSlots(catalogItems, existingGear, headcount) 
     const baseName = String(spec.base_name || '').trim();
     if (!baseName) continue;
 
-    const perPerson = Number(spec.per_person_qty) || 0;
-    const slotSize = Math.max(1, Number(spec.slot_size) || 1);
-    const fixedSlots = Math.max(1, Number(spec.fixed_slots) || 1);
-
-    let totalUnitsNeeded = slotSize * fixedSlots;
-    let slotsNeeded = fixedSlots;
-
-    if (perPerson > 0) {
-      totalUnitsNeeded = Math.max(slotSize, Math.ceil(perPerson * effectivePeople));
-      slotsNeeded = Math.max(1, Math.ceil(totalUnitsNeeded / slotSize));
-    }
+    const { slotsNeeded, slotSize, unit } = computeRealisticSlotsNeeded(spec, effectivePeople);
 
     const existingMatching = existingGear.filter((g) => {
       if (g.ai_key && String(g.ai_key).toLowerCase() === key) return true;
@@ -244,16 +313,15 @@ export function expandGearCatalogToSlots(catalogItems, existingGear, headcount) 
 
     for (let i = 0; i < missingSlots; i++) {
       const slotIndex = existingCount + i + 1;
-      const qtyLabel =
-        slotSize > 1
-          ? `${slotSize} ${spec.unit || 'יח׳'}`
-          : spec.unit && spec.unit !== 'יח׳'
-          ? `${spec.unit} 1`
-          : '';
+
+      // Only show parenthetical quantity when slotSize > 1 (e.g. "12 יח׳", "2 ק״ג")
+      const qtyLabel = slotSize > 1 ? `${slotSize} ${unit}` : '';
       const slotSuffix = slotsNeeded > 1 ? ` #${slotIndex}` : '';
-      const fullItemTitle = qtyLabel
-        ? `${baseName} (${qtyLabel})${slotSuffix}`
-        : `${baseName}${slotSuffix}`;
+      const hasQtyInBaseName = qtyLabel && baseName.includes(String(slotSize));
+      const fullItemTitle =
+        qtyLabel && !hasQtyInBaseName
+          ? `${baseName} (${qtyLabel})${slotSuffix}`
+          : `${baseName}${slotSuffix}`;
 
       const reasonText =
         existingCount > 0
@@ -302,14 +370,20 @@ export async function runGearAgent(env, trip, mealsList = [], existingGear = [],
         `מקום לינה: ${trip.lodging || 'שטח / קמפינג'}`,
         `מסלולים: ${trip.destination || ''}`,
         `פרטים נוספים: ${trip.schedule || ''}`,
-        `מספר משתתפים לחישוב כמויות: ${effectivePeople} נפשות`,
+        `מספר משתתפים לחישוב כמויות: ${effectivePeople} נפשות (מתוכם כמחצית ילדים!)`,
         `ארוחות ותפקידים בטיול:\n${mealsSummary}`,
         `פריטים שכבר קיימים ברשימה:\n${existingGearSummary}`,
         '',
-        'הנחיות:',
-        '1. הפק קטלוג של כלים, ציוד בישול/שטח ומצרכים מרכזיים (כגון ביצים, פיתות/לחם, ירקות לסלט, גבינות/ממרחים, סירים, גזייה, שולחנות מתקפלים, מים, פחמים/עצים למדורה וכו׳) בהתאם לתפריט הארוחות ולאופי הטיול.',
-        '2. עבור מצרכים וציוד שתלויים במספר האנשים, הגדר per_person_qty (כמות לאדם) ו-slot_size (גודל מנה נוחה למשפחה אחת להביא, למשל 12 ביצים, 10 פיתות, 2 ק״ג ירקות, 1 סיר גדול) כדי שהמערכת תחלק את הכמות למספר מנות בין המשפחות.',
-        '3. אם יש פריטים שכבר קיימים עם ai_key, השתמש באותו ai_key ו-base_name כדי שהמערכת תוכל לחשב אם צריך להוסיף עוד מנות מאותו פריט בעקבות גידול במספר המשתתפים.',
+        'הנחיות חשובות לחישוב כמויות ריאליות ומאוזנות (לא להגזים בכמויות!):',
+        '1. זכור שמחצית מהמשתתפים הם ילדים, וכל ארוחה כוללת מגוון מנות על השולחן – לכן הכמויות צריכות להיות הגיוניות וצנועות:',
+        '   - חלות לשבת: חלה אחת מספיקה ל-8–10 אנשים. עבור 25 איש מספיקות 2–3 חלות סה״כ (1–2 מנות של 2 חלות, per_person_qty: 0.12, slot_size: 2).',
+        '   - ביצים לארוחת בוקר: כ-0.85 ביצה לאדם בממוצע. עבור 25 איש מספיקות 2 תבניות של 12 ביצים (per_person_qty: 0.85, slot_size: 12).',
+        '   - לחמניות / פיתות: כ-0.85 יחידה לאדם (per_person_qty: 0.85, slot_size: 10 -> 2 מארזים ל-25 איש).',
+        '   - ירקות לסלט / פירות לדרך: כ-0.12 ק״ג לאדם (per_person_qty: 0.12, slot_size: 2 ק״ג -> 1–2 מנות ל-25 איש).',
+        '   - גבינות / ממרחים / חומוס / חטיפים / דגני בוקר וחלב: מארז משותף אחד לכל ~14 משתתפים (1–2 מנות בלבד לקבוצה של 25 איש).',
+        '   - ציוד קבוצתי (פק״ל קפה, תיונים, שקיות אשפה, כלים מתכלים, מחצלת, סיר/מחבת): הגדר per_person_qty: 0 ו-fixed_slots: 1 (או 2 לכל היותר).',
+        '2. אל תכלול את הכמות בתוך base_name (למשל כתוב "חלות לשבת" ולא "חלות לשבת (2 יח׳)"), כי המערכת מוסיפה את הכמות אוטומטית.',
+        '3. אם יש פריטים שכבר קיימים עם ai_key, השתמש באותו ai_key ו-base_name.',
       ].join('\n');
 
       const interaction = await client.interactions.create({
